@@ -34,6 +34,59 @@ async function main() {
       create: room
     });
   }
+
+  const menuItems = [
+    {
+      id: "menu-sushi-combinado",
+      categoryId: "1",
+      name: "Sushi Combinado",
+      description: "12 peças variadas de sushi fresco com salmão, atum e peixe branco",
+      price: 68.9
+    },
+    {
+      id: "menu-temaki-salmao",
+      categoryId: "2",
+      name: "Temaki de Salmão",
+      description: "Temaki com salmão fresco, cream cheese, pepino e cebolinha",
+      price: 24.9
+    },
+    {
+      id: "menu-temaki-atum",
+      categoryId: "2",
+      name: "Temaki de Atum",
+      description: "Temaki com atum fresco, cebolinha e gergelim",
+      price: 26.9
+    },
+    {
+      id: "menu-hot-roll-filadelfia",
+      categoryId: "3",
+      name: "Hot Roll Filadélfia",
+      description: "8 peças de hot roll empanado com salmão grelhado e cream cheese philadelphia",
+      price: 42.9
+    },
+    {
+      id: "menu-yakisoba",
+      categoryId: "4",
+      name: "Yakisoba",
+      description: "Macarrão frito com legumes frescos e proteína à escolha",
+      price: 38.9
+    },
+    {
+      id: "menu-refrigerante-lata",
+      categoryId: "5",
+      name: "Refrigerante Lata",
+      description: "Coca-Cola, Guaraná Antarctica ou Sprite - 350ml gelado",
+      price: 6.9
+    }
+  ];
+
+  for (const item of menuItems) {
+    await prisma.menuItem.upsert({
+      where: { id: item.id },
+      update: item,
+      create: item
+    });
+  }
 }
 
 main()

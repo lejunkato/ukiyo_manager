@@ -2,31 +2,14 @@ import { useState, useEffect } from "react";
 import { useParams } from "react-router";
 import { ShoppingCart, Plus, Minus, Users, Receipt, X, ChevronDown, ChevronUp } from "lucide-react";
 import logo from "../../imports/image.png";
-
-interface Category {
-  id: string;
-  name: string;
-}
-
-interface MenuItem {
-  id: string;
-  categoryId: string;
-  name: string;
-  description: string;
-  price: number;
-  category: string;
-  image?: string;
-}
+import { api, type Category, type MenuItem, type Room, type RoomSummary, type Tab } from "../lib/api";
 
 interface CartItem extends MenuItem {
   quantity: number;
   observations?: string;
 }
 
-interface TabInfo {
-  tabName: string;
-  personName: string;
-}
+type TabInfo = Pick<Tab, "id" | "tabName" | "personName">;
 
 interface TabStatus {
   tabName: string;
@@ -37,83 +20,24 @@ interface TabStatus {
   items: { name: string; quantity: number; price: number }[];
 }
 
-const mockCategories: Category[] = [
-  { id: "1", name: "Sushi" },
-  { id: "2", name: "Temaki" },
-  { id: "3", name: "Hot Roll" },
-  { id: "4", name: "Pratos Quentes" },
-  { id: "5", name: "Bebidas" },
-];
-
-const mockMenu: MenuItem[] = [
-  {
-    id: "1",
-    categoryId: "1",
-    name: "Sushi Combinado",
-    description: "12 peças variadas de sushi fresco com salmão, atum e peixe branco",
-    price: 68.9,
-    category: "Sushi",
-  },
-  {
-    id: "2",
-    categoryId: "2",
-    name: "Temaki de Salmão",
-    description: "Temaki com salmão fresco, cream cheese, pepino e cebolinha",
-    price: 24.9,
-    category: "Temaki",
-  },
-  {
-    id: "3",
-    categoryId: "2",
-    name: "Temaki de Atum",
-    description: "Temaki com atum fresco, cebolinha e gergelim",
-    price: 26.9,
-    category: "Temaki",
-  },
-  {
-    id: "4",
-    categoryId: "3",
-    name: "Hot Roll Filadélfia",
-    description: "8 peças de hot roll empanado com salmão grelhado e cream cheese philadelphia",
-    price: 42.9,
-    category: "Hot Roll",
-  },
-  {
-    id: "5",
-    categoryId: "4",
-    name: "Yakisoba",
-    description: "Macarrão frito com legumes frescos e proteína à escolha (frango, carne ou camarão)",
-    price: 38.9,
-    category: "Pratos Quentes",
-  },
-  {
-    id: "6",
-    categoryId: "5",
-    name: "Refrigerante Lata",
-    description: "Coca-Cola, Guaraná Antarctica ou Sprite - 350ml gelado",
-    price: 6.9,
-    category: "Bebidas",
-  },
-];
-
 export default function RoomOrder() {
   const { roomId } = useParams();
   const [selectedTab, setSelectedTab] = useState<TabInfo | null>(null);
+  const [room, setRoom] = useState<Room | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [menu, setMenu] = useState<MenuItem[]>([]);
+  const [existingTabs, setExistingTabs] = useState<TabInfo[]>([]);
+  const [tabsStatus, setTabsStatus] = useState<TabStatus[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [showCart, setShowCart] = useState(false);
   const [showTabSelection, setShowTabSelection] = useState(true);
   const [showAccountSummary, setShowAccountSummary] = useState(false);
-  const [existingTabs] = useState<TabInfo[]>([
-    { tabName: "Comanda 1", personName: "João Silva" },
-    { tabName: "Comanda 2", personName: "Maria Santos" },
-  ]);
   const [newTabName, setNewTabName] = useState("");
   const [newPersonName, setNewPersonName] = useState("");
   const [showNewTabForm, setShowNewTabForm] = useState(false);
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [itemObservations, setItemObservations] = useState("");
-
-  const [totalSpent] = useState(245.60);
 
   const [showThumbnails, setShowThumbnails] = useState(() => {
     const saved = localStorage.getItem("ukiyo_show_thumbnails");
@@ -122,39 +46,8 @@ export default function RoomOrder() {
 
   const [expandedTabs, setExpandedTabs] = useState<Set<string>>(new Set());
 
-  const mockTabsStatus: TabStatus[] = [
-    {
-      tabName: "Comanda 1",
-      personName: "João Silva",
-      totalValue: 158.5,
-      paid: true,
-      roomChargePaid: 40.0,
-      items: [
-        { name: "Sushi Combinado", quantity: 2, price: 68.9 },
-        { name: "Refrigerante Lata", quantity: 3, price: 6.9 },
-      ],
-    },
-    {
-      tabName: "Comanda 2",
-      personName: "Maria Santos",
-      totalValue: 92.7,
-      paid: false,
-      roomChargePaid: 0,
-      items: [
-        { name: "Hot Roll Filadélfia", quantity: 1, price: 42.9 },
-        { name: "Temaki de Salmão", quantity: 2, price: 24.9 },
-      ],
-    },
-  ];
-
-  const roomHourlyRate = 50;
-  const sessionStartTime = new Date(Date.now() - 2.5 * 60 * 60 * 1000);
-  const calculateRoomCost = (): number => {
-    const diff = Date.now() - sessionStartTime.getTime();
-    const hours = diff / 3600000;
-    return hours * roomHourlyRate;
-  };
-
+  const currentTabStatus = tabsStatus.find((tab) => tab.tabName === selectedTab?.tabName);
+  const totalSpent = currentTabStatus?.totalValue ?? 0;
   const toggleTab = (tabName: string) => {
     setExpandedTabs((prev) => {
       const newSet = new Set(prev);
@@ -168,15 +61,57 @@ export default function RoomOrder() {
   };
 
   useEffect(() => {
-    if (roomId) {
-      const savedTab = localStorage.getItem(`ukiyo_tab_${roomId}`);
-      if (savedTab) {
-        const tabInfo: TabInfo = JSON.parse(savedTab);
-        setSelectedTab(tabInfo);
-        setShowTabSelection(false);
+    const loadData = async () => {
+      if (!roomId) return;
+
+      try {
+        const [loadedRoom, loadedCategories, loadedItems, loadedTabs, summary] = await Promise.all([
+          api.getRoom(roomId),
+          api.getCategories(),
+          api.getMenuItems(),
+          api.getTabs(roomId),
+          api.getRoomSummary(roomId),
+        ]);
+
+        setRoom(loadedRoom);
+        setCategories(loadedCategories);
+        setMenu(loadedItems.filter((item) => item.available));
+        setExistingTabs(loadedTabs.map((tab) => ({
+          id: tab.id,
+          tabName: tab.tabName,
+          personName: tab.personName,
+        })));
+        setTabsStatus(summary.tabs);
+
+        const savedTab = localStorage.getItem(`ukiyo_tab_${roomId}`);
+        if (savedTab) {
+          const tabInfo: TabInfo = JSON.parse(savedTab);
+          const freshTab = loadedTabs.find((tab) => tab.id === tabInfo.id);
+          if (freshTab) {
+            setSelectedTab({
+              id: freshTab.id,
+              tabName: freshTab.tabName,
+              personName: freshTab.personName,
+            });
+            setShowTabSelection(false);
+          }
+        }
+      } catch (error) {
+        console.error(error);
+        alert("Não foi possível carregar a sala");
+      } finally {
+        setIsLoadingData(false);
       }
-    }
+    };
+
+    loadData();
   }, [roomId]);
+
+  const refreshSummary = async () => {
+    if (!roomId) return;
+    const summary: RoomSummary = await api.getRoomSummary(roomId);
+    setTabsStatus(summary.tabs);
+  };
 
   useEffect(() => {
     const handleStorageChange = () => {
@@ -221,12 +156,31 @@ export default function RoomOrder() {
   const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-  const sendOrder = () => {
-    alert(
-      `Pedido enviado!\n${roomId} - ${selectedTab?.tabName}\nTotal: R$ ${total.toFixed(2)}`
-    );
-    setCart([]);
-    setShowCart(false);
+  const sendOrder = async () => {
+    if (!roomId || !selectedTab) return;
+
+    try {
+      await api.createOrder({
+        roomId,
+        tabId: selectedTab.id,
+        items: cart.map((item) => ({
+          menuItemId: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price,
+          observations: item.observations,
+        })),
+      });
+      alert(
+        `Pedido enviado!\n${roomId} - ${selectedTab?.tabName}\nTotal: R$ ${total.toFixed(2)}`
+      );
+      setCart([]);
+      setShowCart(false);
+      await refreshSummary();
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível enviar o pedido");
+    }
   };
 
   const selectTab = (tab: TabInfo) => {
@@ -237,16 +191,32 @@ export default function RoomOrder() {
     setShowTabSelection(false);
   };
 
-  const createNewTab = () => {
+  const createNewTab = async () => {
     if (!newTabName || !newPersonName) {
       alert("Preencha o nome da comanda e da pessoa");
       return;
     }
-    const newTab: TabInfo = {
-      tabName: newTabName,
-      personName: newPersonName,
-    };
-    selectTab(newTab);
+    if (!roomId) return;
+
+    try {
+      const newTab = await api.createTab(roomId, {
+        tabName: newTabName,
+        personName: newPersonName,
+      });
+      const tabInfo = {
+        id: newTab.id,
+        tabName: newTab.tabName,
+        personName: newTab.personName,
+      };
+      setExistingTabs((prev) => [...prev, tabInfo]);
+      setNewTabName("");
+      setNewPersonName("");
+      selectTab(tabInfo);
+      await refreshSummary();
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível criar a comanda");
+    }
   };
 
   const changeTab = () => {
@@ -261,6 +231,14 @@ export default function RoomOrder() {
     setSelectedItem(item);
     setItemObservations("");
   };
+
+  if (isLoadingData) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-6">
+        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (showTabSelection) {
     return (
@@ -378,8 +356,8 @@ export default function RoomOrder() {
       <div className="p-4 space-y-6">
         <h1>Cardápio</h1>
 
-        {mockCategories.map((category) => {
-          const categoryItems = mockMenu.filter(
+        {categories.map((category) => {
+          const categoryItems = menu.filter(
             (item) => item.categoryId === category.id
           );
 
@@ -632,22 +610,20 @@ export default function RoomOrder() {
               <div className="bg-card border border-border rounded-lg p-4">
                 <h3 className="mb-3">Itens Consumidos</h3>
                 <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span>2x Sushi Combinado</span>
-                    <span>R$ 137.80</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>3x Refrigerante Lata</span>
-                    <span>R$ 20.70</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>1x Hot Roll Filadélfia</span>
-                    <span>R$ 42.90</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>1x Yakisoba</span>
-                    <span>R$ 38.90</span>
-                  </div>
+                  {currentTabStatus?.items.length ? (
+                    currentTabStatus.items.map((item) => (
+                      <div key={item.name} className="flex justify-between">
+                        <span>
+                          {item.quantity}x {item.name}
+                        </span>
+                        <span>R$ {(item.price * item.quantity).toFixed(2)}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-muted-foreground">
+                      Nenhum item consumido ainda
+                    </div>
+                  )}
                 </div>
               </div>
 

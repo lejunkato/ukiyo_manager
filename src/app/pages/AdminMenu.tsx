@@ -1,78 +1,20 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Plus, Pencil, Trash2, ArrowLeft, ChevronDown, ChevronUp, Settings, LogOut } from "lucide-react";
 import logo from "../../imports/image.png";
 import ImageUpload from "../components/ImageUpload";
 import { useAuth } from "../contexts/AuthContext";
-
-interface Category {
-  id: string;
-  name: string;
-  description: string;
-  order: number;
-}
-
-interface MenuItem {
-  id: string;
-  categoryId: string;
-  name: string;
-  description: string;
-  price: number;
-  available: boolean;
-  image?: string;
-}
-
-const initialCategories: Category[] = [
-  { id: "1", name: "Sushi", description: "Sushis tradicionais e especiais", order: 1 },
-  { id: "2", name: "Temaki", description: "Temakis variados", order: 2 },
-  { id: "3", name: "Hot Roll", description: "Hot rolls empanados", order: 3 },
-  { id: "4", name: "Pratos Quentes", description: "Pratos orientais quentes", order: 4 },
-  { id: "5", name: "Bebidas", description: "Bebidas em geral", order: 5 },
-];
-
-const initialMenu: MenuItem[] = [
-  {
-    id: "1",
-    categoryId: "1",
-    name: "Sushi Combinado",
-    description: "12 peças variadas de sushi fresco",
-    price: 68.9,
-    available: true,
-  },
-  {
-    id: "2",
-    categoryId: "2",
-    name: "Temaki de Salmão",
-    description: "Temaki com salmão fresco e cream cheese",
-    price: 24.9,
-    available: true,
-  },
-  {
-    id: "3",
-    categoryId: "2",
-    name: "Temaki de Atum",
-    description: "Temaki com atum fresco e cebolinha",
-    price: 26.9,
-    available: true,
-  },
-  {
-    id: "4",
-    categoryId: "3",
-    name: "Hot Roll Filadélfia",
-    description: "8 peças de hot roll com salmão e philadelphia",
-    price: 42.9,
-    available: true,
-  },
-];
+import { api, type Category, type MenuItem } from "../lib/api";
 
 type ModalType = "category" | "item" | null;
 
 export default function AdminMenu() {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [categories, setCategories] = useState<Category[]>(initialCategories);
-  const [menu, setMenu] = useState<MenuItem[]>(initialMenu);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [menu, setMenu] = useState<MenuItem[]>([]);
+  const [isLoadingMenu, setIsLoadingMenu] = useState(true);
   const [modalType, setModalType] = useState<ModalType>(null);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
@@ -104,6 +46,27 @@ export default function AdminMenu() {
     available: true,
     image: "" as string | undefined,
   });
+
+  useEffect(() => {
+    const loadMenu = async () => {
+      try {
+        const [loadedCategories, loadedItems] = await Promise.all([
+          api.getCategories(),
+          api.getMenuItems(),
+        ]);
+        setCategories(loadedCategories);
+        setMenu(loadedItems);
+        setExpandedCategories(new Set(loadedCategories.map((category) => category.id)));
+      } catch (error) {
+        console.error(error);
+        alert("Não foi possível carregar o cardápio");
+      } finally {
+        setIsLoadingMenu(false);
+      }
+    };
+
+    loadMenu();
+  }, []);
 
   const openCategoryModal = (category?: Category) => {
     if (category) {
@@ -147,39 +110,43 @@ export default function AdminMenu() {
     setModalType("item");
   };
 
-  const saveCategory = () => {
+  const saveCategory = async () => {
     if (!categoryForm.name) {
       alert("Preencha o nome da categoria");
       return;
     }
 
-    const newCategory: Category = {
-      id: editingCategory?.id || Date.now().toString(),
+    const categoryData = {
       name: categoryForm.name,
       description: categoryForm.description,
       order: editingCategory?.order || categories.length + 1,
     };
 
-    if (editingCategory) {
-      setCategories((prev) =>
-        prev.map((cat) => (cat.id === editingCategory.id ? newCategory : cat))
-      );
-    } else {
-      setCategories((prev) => [...prev, newCategory]);
-      setExpandedCategories((prev) => new Set([...prev, newCategory.id]));
+    try {
+      if (editingCategory) {
+        const updatedCategory = await api.updateCategory(editingCategory.id, categoryData, token);
+        setCategories((prev) =>
+          prev.map((cat) => (cat.id === editingCategory.id ? updatedCategory : cat))
+        );
+      } else {
+        const newCategory = await api.createCategory(categoryData, token);
+        setCategories((prev) => [...prev, newCategory]);
+        setExpandedCategories((prev) => new Set([...prev, newCategory.id]));
+      }
+      setModalType(null);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível salvar a categoria");
     }
-
-    setModalType(null);
   };
 
-  const saveItem = () => {
+  const saveItem = async () => {
     if (!itemForm.name || !itemForm.price || !itemForm.categoryId) {
       alert("Preencha todos os campos obrigatórios");
       return;
     }
 
-    const newItem: MenuItem = {
-      id: editingItem?.id || Date.now().toString(),
+    const itemData = {
       categoryId: itemForm.categoryId,
       name: itemForm.name,
       description: itemForm.description,
@@ -188,15 +155,21 @@ export default function AdminMenu() {
       image: itemForm.image,
     };
 
-    if (editingItem) {
-      setMenu((prev) =>
-        prev.map((item) => (item.id === editingItem.id ? newItem : item))
-      );
-    } else {
-      setMenu((prev) => [...prev, newItem]);
+    try {
+      if (editingItem) {
+        const updatedItem = await api.updateMenuItem(editingItem.id, itemData, token);
+        setMenu((prev) =>
+          prev.map((item) => (item.id === editingItem.id ? updatedItem : item))
+        );
+      } else {
+        const newItem = await api.createMenuItem(itemData, token);
+        setMenu((prev) => [...prev, newItem]);
+      }
+      setModalType(null);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível salvar o item");
     }
-
-    setModalType(null);
   };
 
   const toggleShowThumbnails = () => {
@@ -205,29 +178,48 @@ export default function AdminMenu() {
     localStorage.setItem("ukiyo_show_thumbnails", JSON.stringify(newValue));
   };
 
-  const deleteCategory = (id: string) => {
+  const deleteCategory = async (id: string) => {
     const hasItems = menu.some((item) => item.categoryId === id);
     if (hasItems) {
       alert("Não é possível excluir uma categoria que contém itens");
       return;
     }
     if (confirm("Deseja realmente excluir esta categoria?")) {
-      setCategories((prev) => prev.filter((cat) => cat.id !== id));
+      try {
+        await api.deleteCategory(id, token);
+        setCategories((prev) => prev.filter((cat) => cat.id !== id));
+      } catch (error) {
+        console.error(error);
+        alert("Não foi possível excluir a categoria");
+      }
     }
   };
 
-  const deleteItem = (id: string) => {
+  const deleteItem = async (id: string) => {
     if (confirm("Deseja realmente excluir este item?")) {
-      setMenu((prev) => prev.filter((item) => item.id !== id));
+      try {
+        await api.deleteMenuItem(id, token);
+        setMenu((prev) => prev.filter((item) => item.id !== id));
+      } catch (error) {
+        console.error(error);
+        alert("Não foi possível excluir o item");
+      }
     }
   };
 
-  const toggleItemAvailability = (id: string) => {
-    setMenu((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, available: !item.available } : item
-      )
-    );
+  const toggleItemAvailability = async (id: string) => {
+    const item = menu.find((menuItem) => menuItem.id === id);
+    if (!item) return;
+
+    try {
+      const updatedItem = await api.updateMenuItem(id, { available: !item.available }, token);
+      setMenu((prev) =>
+        prev.map((menuItem) => (menuItem.id === id ? updatedItem : menuItem))
+      );
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível atualizar o item");
+    }
   };
 
   const toggleCategory = (id: string) => {
@@ -295,6 +287,12 @@ export default function AdminMenu() {
 
       {/* Menu List */}
       <div className="max-w-7xl mx-auto p-6">
+        {isLoadingMenu && (
+          <div className="text-center py-12 text-muted-foreground">
+            Carregando cardápio...
+          </div>
+        )}
+
         <div className="space-y-4">
           {sortedCategories.map((category) => {
             const categoryItems = menu.filter(

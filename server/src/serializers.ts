@@ -30,6 +30,7 @@ export function orderDto(order: Order & { room?: Room; tab?: Tab; items: OrderIt
   return {
     ...order,
     roomId: order.room?.name ?? order.roomId,
+    tabId: order.tab?.id ?? order.tabId,
     tabName: order.tab?.tabName,
     personName: order.tab?.personName,
     total: Number(order.total),

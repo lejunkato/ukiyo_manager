@@ -1,69 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { ArrowLeft, Clock, Check, X, QrCode, ChevronDown, ChevronUp, DollarSign, LogOut, Edit, Trash2, Plus, Minus } from "lucide-react";
 import logo from "../../imports/image.png";
 import QRCodeDisplay from "../components/QRCodeDisplay";
 import { useAuth } from "../contexts/AuthContext";
+import { api, type Order as ApiOrder, type OrderItem as ApiOrderItem, type Room } from "../lib/api";
 
-interface OrderItem {
-  id: string;
-  name: string;
-  quantity: number;
-  price: number;
-}
+type OrderItem = ApiOrderItem;
 
-interface Order {
-  id: string;
-  roomId: string;
-  tabName: string;
-  personName: string;
-  items: OrderItem[];
-  total: number;
-  status: "pending" | "preparing" | "delivered" | "cancelled";
-  timestamp: Date;
-}
-
-const mockOrders: Order[] = [
-  {
-    id: "1",
-    roomId: "Sala 1",
-    tabName: "Comanda 1",
-    personName: "João Silva",
-    items: [
-      { id: "1", name: "Sushi Combinado", quantity: 2, price: 68.9 },
-      { id: "2", name: "Refrigerante Lata", quantity: 3, price: 6.9 },
-    ],
-    total: 158.5,
-    status: "pending",
-    timestamp: new Date(Date.now() - 5 * 60000),
-  },
-  {
-    id: "2",
-    roomId: "Sala 1",
-    tabName: "Comanda 2",
-    personName: "Maria Santos",
-    items: [
-      { id: "3", name: "Hot Roll Filadélfia", quantity: 1, price: 42.9 },
-      { id: "4", name: "Temaki de Salmão", quantity: 2, price: 24.9 },
-    ],
-    total: 92.7,
-    status: "preparing",
-    timestamp: new Date(Date.now() - 10 * 60000),
-  },
-  {
-    id: "3",
-    roomId: "Sala 3",
-    tabName: "Comanda 1",
-    personName: "Pedro Costa",
-    items: [
-      { id: "1", name: "Sushi Combinado", quantity: 1, price: 68.9 },
-      { id: "5", name: "Yakisoba", quantity: 2, price: 38.9 },
-    ],
-    total: 146.7,
-    status: "preparing",
-    timestamp: new Date(Date.now() - 15 * 60000),
-  },
-];
+type Order = Omit<ApiOrder, "timestamp"> & { timestamp: Date };
 
 interface RoomSession {
   roomId: string;
@@ -74,6 +19,7 @@ interface RoomSession {
 }
 
 interface TabSession {
+  tabId: string;
   tabName: string;
   personName: string;
   orders: Order[];
@@ -88,19 +34,13 @@ interface TabPayment {
   roomCharge: number;
 }
 
-const mockRoomRates: Record<string, number> = {
-  "Sala 1": 50,
-  "Sala 2": 40,
-  "Sala 3": 60,
-  "Sala 4": 70,
-  "Sala 5": 50,
-};
-
 export default function AdminOrders() {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [orders, setOrders] = useState<Order[]>(mockOrders);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [isLoadingOrders, setIsLoadingOrders] = useState(true);
   const [activeTab, setActiveTab] = useState<"orders" | "sessions">("orders");
   const [showQRModal, setShowQRModal] = useState<string | null>(null);
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
@@ -120,23 +60,64 @@ export default function AdminOrders() {
     navigate("/admin/login");
   };
 
-  const markAsViewed = (orderId: string) => {
+  const normalizeOrder = (order: ApiOrder): Order => ({
+    ...order,
+    timestamp: new Date(order.timestamp),
+  });
+
+  const loadOrders = async () => {
+    try {
+      const [loadedOrders, loadedRooms] = await Promise.all([
+        api.getOrders(token),
+        api.getRooms(),
+      ]);
+      setOrders(loadedOrders.map(normalizeOrder));
+      setRooms(loadedRooms);
+      setViewedOrders(new Set(loadedOrders.filter((order) => order.viewed).map((order) => order.id)));
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível carregar os pedidos");
+    } finally {
+      setIsLoadingOrders(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOrders();
+  }, [token]);
+
+  const markAsViewed = async (orderId: string) => {
     setViewedOrders((prev) => new Set([...prev, orderId]));
+    const order = orders.find((item) => item.id === orderId);
+    if (!order?.viewed) {
+      try {
+        const updatedOrder = normalizeOrder(await api.updateOrder(orderId, { viewed: true }, token));
+        setOrders((prev) => prev.map((item) => item.id === orderId ? updatedOrder : item));
+      } catch (error) {
+        console.error(error);
+      }
+    }
   };
 
   const openEditOrder = (order: Order) => {
     setEditingOrder({ ...order });
   };
 
-  const saveEditedOrder = () => {
+  const saveEditedOrder = async () => {
     if (!editingOrder) return;
 
-    setOrders((prev) =>
-      prev.map((order) =>
-        order.id === editingOrder.id ? editingOrder : order
-      )
-    );
-    setEditingOrder(null);
+    try {
+      const updatedOrder = normalizeOrder(await api.updateOrderItems(editingOrder.id, editingOrder.items, token));
+      setOrders((prev) =>
+        prev.map((order) =>
+          order.id === editingOrder.id ? updatedOrder : order
+        )
+      );
+      setEditingOrder(null);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível salvar o pedido");
+    }
   };
 
   const updateOrderItem = (itemId: string, quantity: number) => {
@@ -165,21 +146,25 @@ export default function AdminOrders() {
     }
   };
 
-  const deleteOrder = (orderId: string) => {
+  const deleteOrder = async (orderId: string) => {
     if (confirm("Deseja realmente excluir este pedido?")) {
-      setOrders((prev) => prev.filter((order) => order.id !== orderId));
+      try {
+        await api.deleteOrder(orderId, token);
+        setOrders((prev) => prev.filter((order) => order.id !== orderId));
+      } catch (error) {
+        console.error(error);
+        alert("Não foi possível excluir o pedido");
+      }
     }
   };
 
-  const updateTabItem = (roomId: string, tabName: string, itemId: string, newQuantity: number) => {
-    setOrders((prev) => {
-      return prev.map((order) => {
+  const updateTabItem = async (roomId: string, tabName: string, itemId: string, newQuantity: number) => {
+    const affectedOrders: Order[] = [];
+    const nextOrders = orders
+      .map((order) => {
         if (order.roomId === roomId && order.tabName === tabName) {
           const updatedItems = order.items.map((item) => {
             if (item.id === itemId) {
-              const quantityDiff = newQuantity - item.quantity;
-              if (quantityDiff === 0) return item;
-
               return { ...item, quantity: newQuantity };
             }
             return item;
@@ -190,39 +175,48 @@ export default function AdminOrders() {
             0
           );
 
-          return { ...order, items: updatedItems, total: newTotal };
+          const updatedOrder = { ...order, items: updatedItems, total: newTotal };
+          affectedOrders.push(updatedOrder);
+          return updatedOrder;
         }
         return order;
-      }).filter((order) => order.items.length > 0);
-    });
+      })
+      .filter((order) => order.items.length > 0);
+
+    setOrders(nextOrders);
+
+    try {
+      await Promise.all(
+        affectedOrders.map((order) =>
+          order.items.length > 0
+            ? api.updateOrderItems(order.id, order.items, token)
+            : api.deleteOrder(order.id, token)
+        )
+      );
+      await loadOrders();
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível atualizar a comanda");
+      await loadOrders();
+    }
   };
 
-  const removeTabItem = (roomId: string, tabName: string, itemId: string) => {
+  const removeTabItem = async (roomId: string, tabName: string, itemId: string) => {
     if (!confirm("Deseja remover este item da comanda?")) return;
 
-    setOrders((prev) => {
-      return prev.map((order) => {
-        if (order.roomId === roomId && order.tabName === tabName) {
-          const updatedItems = order.items.filter((item) => item.id !== itemId);
-
-          if (updatedItems.length === 0) return null;
-
-          const newTotal = updatedItems.reduce(
-            (sum, item) => sum + item.price * item.quantity,
-            0
-          );
-
-          return { ...order, items: updatedItems, total: newTotal };
-        }
-        return order;
-      }).filter((order) => order !== null) as Order[];
-    });
+    await updateTabItem(roomId, tabName, itemId, 0);
   };
 
-  const updateOrderStatus = (orderId: string, status: Order["status"]) => {
-    setOrders((prev) =>
-      prev.map((order) => (order.id === orderId ? { ...order, status } : order))
-    );
+  const updateOrderStatus = async (orderId: string, status: Order["status"]) => {
+    try {
+      const updatedOrder = normalizeOrder(await api.updateOrder(orderId, { status }, token));
+      setOrders((prev) =>
+        prev.map((order) => (order.id === orderId ? updatedOrder : order))
+      );
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível atualizar o status do pedido");
+    }
   };
 
   const getStatusColor = (status: Order["status"]) => {
@@ -300,10 +294,11 @@ export default function AdminOrders() {
     const roomMap = new Map<string, RoomSession>();
 
     orders.forEach((order) => {
+      const roomRate = rooms.find((room) => room.name === order.roomId)?.hourlyRate ?? 50;
       if (!roomMap.has(order.roomId)) {
         roomMap.set(order.roomId, {
           roomId: order.roomId,
-          hourlyRate: mockRoomRates[order.roomId] || 50,
+          hourlyRate: roomRate,
           tabs: [],
           startTime: order.timestamp,
           active: true,
@@ -315,6 +310,7 @@ export default function AdminOrders() {
 
       if (!tab) {
         tab = {
+          tabId: order.tabId,
           tabName: order.tabName,
           personName: order.personName,
           orders: [],
@@ -354,17 +350,26 @@ export default function AdminOrders() {
     setClosingTab({ room, tab });
   };
 
-  const confirmCloseTab = (roomCharge: number) => {
+  const confirmCloseTab = async (roomCharge: number) => {
     if (!closingTab) return;
 
-    const updatedTab = { ...closingTab.tab, roomChargePaid: roomCharge, paid: true };
-    alert(
-      `Comanda fechada!\n${closingTab.tab.tabName} - ${closingTab.tab.personName}\n` +
-        `Consumo: R$ ${closingTab.tab.totalValue.toFixed(2)}\n` +
-        `Taxa da Sala: R$ ${roomCharge.toFixed(2)}\n` +
-        `Total: R$ ${(closingTab.tab.totalValue + roomCharge).toFixed(2)}`
-    );
-    setClosingTab(null);
+    try {
+      await api.updateTab(closingTab.tab.tabId, {
+        roomChargePaid: roomCharge,
+        paid: true,
+      }, token);
+      alert(
+        `Comanda fechada!\n${closingTab.tab.tabName} - ${closingTab.tab.personName}\n` +
+          `Consumo: R$ ${closingTab.tab.totalValue.toFixed(2)}\n` +
+          `Taxa da Sala: R$ ${roomCharge.toFixed(2)}\n` +
+          `Total: R$ ${(closingTab.tab.totalValue + roomCharge).toFixed(2)}`
+      );
+      setClosingTab(null);
+      await loadOrders();
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível fechar a comanda");
+    }
   };
 
   const closeRoom = (room: RoomSession) => {
@@ -373,7 +378,7 @@ export default function AdminOrders() {
     setCustomPayments({});
   };
 
-  const confirmCloseRoom = () => {
+  const confirmCloseRoom = async () => {
     if (!closingRoom) return;
 
     const openTabs = closingRoom.tabs.filter((t) => !t.paid);
@@ -403,15 +408,32 @@ export default function AdminOrders() {
       )
       .join("\n");
 
-    alert(
-      `Sala fechada!\n${closingRoom.roomId}\n\n` +
-        `Custo Total da Sala: R$ ${totalRoomCost.toFixed(2)}\n` +
-        `Já Pago: R$ ${paidRoomCharge.toFixed(2)}\n` +
-        `Restante: R$ ${remainingRoomCost.toFixed(2)}\n\n` +
-        `Divisão:\n${summary}`
-    );
+    try {
+      await Promise.all(
+        openTabs.map((tab) => {
+          const payment = payments.find((item) => item.tabName === tab.tabName);
+          return api.updateTab(tab.tabId, {
+            paid: true,
+            active: false,
+            roomChargePaid: payment?.roomCharge ?? 0,
+          }, token);
+        })
+      );
 
-    setClosingRoom(null);
+      alert(
+        `Sala fechada!\n${closingRoom.roomId}\n\n` +
+          `Custo Total da Sala: R$ ${totalRoomCost.toFixed(2)}\n` +
+          `Já Pago: R$ ${paidRoomCharge.toFixed(2)}\n` +
+          `Restante: R$ ${remainingRoomCost.toFixed(2)}\n\n` +
+          `Divisão:\n${summary}`
+      );
+
+      setClosingRoom(null);
+      await loadOrders();
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível fechar a sala");
+    }
   };
 
   const roomSessions = groupOrdersByRoom();
@@ -479,6 +501,12 @@ export default function AdminOrders() {
       {/* Orders Tab */}
       {activeTab === "orders" && (
         <div className="max-w-7xl mx-auto p-6">
+          {isLoadingOrders && (
+            <div className="text-center py-12 text-muted-foreground">
+              Carregando pedidos...
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
             {orders
               .filter((order) => order.status !== "delivered" && order.status !== "cancelled")

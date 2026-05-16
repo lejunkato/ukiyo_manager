@@ -4,12 +4,16 @@ import { OAuth2Client } from "google-auth-library";
 import helmet from "helmet";
 import morgan from "morgan";
 import { Prisma, type OrderStatus } from "@prisma/client";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { requireAuth, signToken } from "./auth.js";
 import { prisma } from "./db.js";
 import { env } from "./env.js";
 import { categoryDto, menuItemDto, orderDto, roomDto, tabDto } from "./serializers.js";
 
 const app = express();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDistPath = path.resolve(__dirname, "../../dist");
 const googleClient = env.googleClientId && env.googleClientSecret
   ? new OAuth2Client(
       env.googleClientId,
@@ -133,6 +137,20 @@ app.get("/rooms", async (_req, res, next) => {
   try {
     const rooms = await prisma.room.findMany({ orderBy: [{ floor: "asc" }, { name: "asc" }] });
     res.json(rooms.map(roomDto));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/rooms/:roomId", async (req, res, next) => {
+  try {
+    const room = await resolveRoom(routeParam(req.params.roomId));
+    if (!room) {
+      res.status(404).json({ error: "room_not_found" });
+      return;
+    }
+
+    res.json(roomDto(room));
   } catch (error) {
     next(error);
   }
@@ -331,6 +349,84 @@ app.post("/rooms/:roomId/tabs", async (req, res, next) => {
   }
 });
 
+app.patch("/tabs/:id", requireAuth, async (req, res, next) => {
+  try {
+    const tab = await prisma.tab.update({
+      where: { id: routeParam(req.params.id) },
+      data: {
+        paid: req.body.paid,
+        active: req.body.active,
+        roomChargePaid: req.body.roomChargePaid === undefined
+          ? undefined
+          : new Prisma.Decimal(req.body.roomChargePaid),
+        closedAt: req.body.active === false ? new Date() : undefined
+      }
+    });
+    res.json(tabDto(tab));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/rooms/:roomId/summary", async (req, res, next) => {
+  try {
+    const room = await resolveRoom(routeParam(req.params.roomId));
+    if (!room) {
+      res.status(404).json({ error: "room_not_found" });
+      return;
+    }
+
+    const tabs = await prisma.tab.findMany({
+      where: { roomId: room.id, active: true },
+      include: {
+        orders: {
+          include: { items: true },
+          orderBy: { createdAt: "asc" }
+        }
+      },
+      orderBy: { createdAt: "asc" }
+    });
+
+    res.json({
+      room: roomDto(room),
+      tabs: tabs.map((tab) => {
+        const itemsMap = new Map<string, { name: string; quantity: number; price: number }>();
+        let totalValue = 0;
+
+        for (const order of tab.orders) {
+          if (order.status === "cancelled") continue;
+          totalValue += Number(order.total);
+          for (const item of order.items) {
+            const key = item.name;
+            const existing = itemsMap.get(key);
+            if (existing) {
+              existing.quantity += item.quantity;
+            } else {
+              itemsMap.set(key, {
+                name: item.name,
+                quantity: item.quantity,
+                price: Number(item.price)
+              });
+            }
+          }
+        }
+
+        return {
+          id: tab.id,
+          tabName: tab.tabName,
+          personName: tab.personName,
+          totalValue,
+          paid: tab.paid,
+          roomChargePaid: Number(tab.roomChargePaid),
+          items: Array.from(itemsMap.values())
+        };
+      })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/orders", requireAuth, async (_req, res, next) => {
   try {
     const orders = await prisma.order.findMany({
@@ -397,6 +493,41 @@ app.patch("/orders/:id", requireAuth, async (req, res, next) => {
   }
 });
 
+app.put("/orders/:id/items", requireAuth, async (req, res, next) => {
+  try {
+    const orderId = routeParam(req.params.id);
+    const items: CreateOrderItemInput[] = Array.isArray(req.body.items) ? req.body.items : [];
+    const total = items.reduce(
+      (sum: number, item: CreateOrderItemInput) => sum + Number(item.price) * Number(item.quantity),
+      0
+    );
+
+    const order = await prisma.$transaction(async (tx) => {
+      await tx.orderItem.deleteMany({ where: { orderId } });
+      return tx.order.update({
+        where: { id: orderId },
+        data: {
+          total: new Prisma.Decimal(total),
+          items: {
+            create: items.map((item: CreateOrderItemInput) => ({
+              menuItemId: item.menuItemId,
+              name: String(item.name),
+              quantity: Number(item.quantity),
+              price: new Prisma.Decimal(item.price),
+              observations: item.observations
+            }))
+          }
+        },
+        include: { room: true, tab: true, items: true }
+      });
+    });
+
+    res.json(orderDto(order));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/orders/:id", requireAuth, async (req, res, next) => {
   try {
     await prisma.order.delete({ where: { id: routeParam(req.params.id) } });
@@ -404,6 +535,12 @@ app.delete("/orders/:id", requireAuth, async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.use(express.static(clientDistPath));
+
+app.get(/^(?!\/(?:auth|rooms|categories|menu-items|orders|tabs|health)(?:\/|$)).*/, (_req, res) => {
+  res.sendFile(path.join(clientDistPath, "index.html"));
 });
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -1,32 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { ArrowLeft, Plus, Pencil, Trash2, QrCode, LogOut } from "lucide-react";
 import logo from "../../imports/image.png";
 import QRCodeDisplay from "../components/QRCodeDisplay";
 import { useAuth } from "../contexts/AuthContext";
-
-interface Room {
-  id: string;
-  name: string;
-  floor: number;
-  capacity: number;
-  hourlyRate: number;
-  active: boolean;
-}
-
-const initialRooms: Room[] = [
-  { id: "1", name: "Sala 1", floor: 1, capacity: 8, hourlyRate: 50, active: true },
-  { id: "2", name: "Sala 2", floor: 1, capacity: 6, hourlyRate: 40, active: true },
-  { id: "3", name: "Sala 3", floor: 2, capacity: 10, hourlyRate: 60, active: true },
-  { id: "4", name: "Sala 4", floor: 2, capacity: 12, hourlyRate: 70, active: true },
-  { id: "5", name: "Sala 5", floor: 3, capacity: 8, hourlyRate: 50, active: true },
-];
+import { api, type Room } from "../lib/api";
 
 export default function AdminRooms() {
-  const { user, logout } = useAuth();
+  const { user, token, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [rooms, setRooms] = useState<Room[]>(initialRooms);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [isLoadingRooms, setIsLoadingRooms] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showQRModal, setShowQRModal] = useState<Room | null>(null);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
@@ -43,6 +28,21 @@ export default function AdminRooms() {
     hourlyRate: "",
     active: true,
   });
+
+  useEffect(() => {
+    const loadRooms = async () => {
+      try {
+        setRooms(await api.getRooms());
+      } catch (error) {
+        console.error(error);
+        alert("Não foi possível carregar as salas");
+      } finally {
+        setIsLoadingRooms(false);
+      }
+    };
+
+    loadRooms();
+  }, []);
 
   const openModal = (room?: Room) => {
     if (room) {
@@ -67,14 +67,13 @@ export default function AdminRooms() {
     setShowModal(true);
   };
 
-  const saveRoom = () => {
+  const saveRoom = async () => {
     if (!formData.name || !formData.floor || !formData.capacity || !formData.hourlyRate) {
       alert("Preencha todos os campos obrigatórios");
       return;
     }
 
-    const newRoom: Room = {
-      id: editingRoom?.id || Date.now().toString(),
+    const roomData = {
       name: formData.name,
       floor: parseInt(formData.floor),
       capacity: parseInt(formData.capacity),
@@ -82,29 +81,48 @@ export default function AdminRooms() {
       active: formData.active,
     };
 
-    if (editingRoom) {
-      setRooms((prev) =>
-        prev.map((room) => (room.id === editingRoom.id ? newRoom : room))
-      );
-    } else {
-      setRooms((prev) => [...prev, newRoom]);
+    try {
+      if (editingRoom) {
+        const updatedRoom = await api.updateRoom(editingRoom.id, roomData, token);
+        setRooms((prev) =>
+          prev.map((room) => (room.id === editingRoom.id ? updatedRoom : room))
+        );
+      } else {
+        const newRoom = await api.createRoom(roomData, token);
+        setRooms((prev) => [...prev, newRoom]);
+      }
+      setShowModal(false);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível salvar a sala");
     }
-
-    setShowModal(false);
   };
 
-  const deleteRoom = (id: string) => {
+  const deleteRoom = async (id: string) => {
     if (confirm("Deseja realmente excluir esta sala?")) {
-      setRooms((prev) => prev.filter((room) => room.id !== id));
+      try {
+        await api.deleteRoom(id, token);
+        setRooms((prev) => prev.filter((room) => room.id !== id));
+      } catch (error) {
+        console.error(error);
+        alert("Não foi possível excluir a sala");
+      }
     }
   };
 
-  const toggleActive = (id: string) => {
-    setRooms((prev) =>
-      prev.map((room) =>
-        room.id === id ? { ...room, active: !room.active } : room
-      )
-    );
+  const toggleActive = async (id: string) => {
+    const room = rooms.find((item) => item.id === id);
+    if (!room) return;
+
+    try {
+      const updatedRoom = await api.updateRoom(id, { active: !room.active }, token);
+      setRooms((prev) =>
+        prev.map((item) => (item.id === id ? updatedRoom : item))
+      );
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível atualizar a sala");
+    }
   };
 
   const groupedByFloor = rooms.reduce((acc, room) => {
@@ -159,6 +177,12 @@ export default function AdminRooms() {
       {/* Rooms List */}
       <div className="max-w-7xl mx-auto p-6">
         <div className="space-y-6">
+          {isLoadingRooms && (
+            <div className="text-center py-12 text-muted-foreground">
+              Carregando salas...
+            </div>
+          )}
+
           {Object.entries(groupedByFloor)
             .sort(([a], [b]) => parseInt(a) - parseInt(b))
             .map(([floor, floorRooms]) => (
