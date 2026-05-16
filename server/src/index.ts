@@ -1,6 +1,5 @@
 import cors from "cors";
 import express from "express";
-import { OAuth2Client } from "google-auth-library";
 import helmet from "helmet";
 import morgan from "morgan";
 import { Prisma, type OrderStatus } from "@prisma/client";
@@ -14,13 +13,6 @@ import { categoryDto, menuItemDto, orderDto, roomDto, tabDto } from "./serialize
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDistPath = path.resolve(__dirname, "../../dist");
-const googleClient = env.googleClientId && env.googleClientSecret
-  ? new OAuth2Client(
-      env.googleClientId,
-      env.googleClientSecret,
-      `${env.backendUrl}/auth/google/callback`
-    )
-  : null;
 
 function slugify(value: string) {
   return value
@@ -60,70 +52,36 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/auth/google/login", (_req, res) => {
-  if (!googleClient) {
-    res.status(500).json({ error: "google_oauth_not_configured" });
-    return;
-  }
-
-  const authUrl = googleClient.generateAuthUrl({
-    access_type: "offline",
-    prompt: "select_account",
-    scope: ["profile", "email"]
-  });
-
-  res.json({ authUrl });
-});
-
-app.get("/auth/google/callback", async (req, res, next) => {
+app.post("/auth/login", async (req, res, next) => {
   try {
-    if (!googleClient || !env.googleClientId) {
-      res.redirect(`${env.frontendUrl}/admin/login?error=google_oauth_not_configured`);
-      return;
-    }
+    const email = String(req.body.email ?? "").trim().toLowerCase();
+    const password = String(req.body.password ?? "");
 
-    const code = String(req.query.code ?? "");
-    const { tokens } = await googleClient.getToken(code);
-
-    if (!tokens.id_token) {
-      res.redirect(`${env.frontendUrl}/admin/login?error=missing_id_token`);
-      return;
-    }
-
-    const ticket = await googleClient.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: env.googleClientId
-    });
-    const payload = ticket.getPayload();
-    const email = payload?.email?.toLowerCase();
-
-    if (!email || (env.allowedEmails.length > 0 && !env.allowedEmails.includes(email))) {
-      res.redirect(`${env.frontendUrl}/admin/login?error=unauthorized`);
+    if (email !== env.adminEmail || password !== env.adminPassword) {
+      res.status(401).json({ error: "invalid_credentials" });
       return;
     }
 
     const user = await prisma.user.upsert({
       where: { email },
       update: {
-        name: payload?.name ?? email,
-        picture: payload?.picture
+        name: email
       },
       create: {
         email,
-        name: payload?.name ?? email,
-        picture: payload?.picture
+        name: email
       }
     });
 
     const token = signToken(user);
-    const params = new URLSearchParams({
+    res.json({
       token,
-      email: user.email,
-      name: user.name,
-      picture: user.picture ?? ""
+      user: {
+        email: user.email,
+        name: user.name,
+        picture: user.picture
+      }
     });
-
-    res.redirect(`${env.frontendUrl}/admin/callback?${params.toString()}`);
   } catch (error) {
     next(error);
   }

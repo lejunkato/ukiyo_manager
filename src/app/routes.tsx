@@ -5,7 +5,6 @@ import AdminMenu from "./pages/AdminMenu";
 import AdminOrders from "./pages/AdminOrders";
 import AdminRooms from "./pages/AdminRooms";
 import AdminLogin from "./pages/AdminLogin";
-import AdminCallback from "./pages/AdminCallback";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 export const router = createBrowserRouter([
@@ -20,10 +19,6 @@ export const router = createBrowserRouter([
   {
     path: "/admin/login",
     Component: AdminLogin,
-  },
-  {
-    path: "/admin/callback",
-    Component: AdminCallback,
   },
   {
     path: "/admin/menu",

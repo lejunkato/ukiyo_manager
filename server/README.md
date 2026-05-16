@@ -1,6 +1,6 @@
 # Backend Ukiyo
 
-API Node/Express com Prisma e PostgreSQL para salas, cardápio, comandas, pedidos e login administrativo com Google.
+API Node/Express com Prisma e PostgreSQL para salas, cardápio, comandas, pedidos e login administrativo simples.
 
 ## Rodar localmente
 
@@ -10,7 +10,7 @@ API Node/Express com Prisma e PostgreSQL para salas, cardápio, comandas, pedido
 npm install
 ```
 
-2. Crie um `.env` a partir do `.env.example` e configure `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL` e `BACKEND_URL`.
+2. Crie um `.env` a partir do `.env.example` e configure `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `FRONTEND_URL` e `BACKEND_URL`.
 
 3. Gere o Prisma Client e rode as migrations:
 
@@ -40,22 +40,15 @@ Configure no Render:
 ```env
 FRONTEND_URL=https://seu-site.onrender.com
 BACKEND_URL=https://seu-site.onrender.com
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-ALLOWED_EMAILS=seu-email@gmail.com,outro-email@gmail.com
-```
-
-No Google Cloud Console, use esta URL de callback:
-
-```text
-https://seu-site.onrender.com/auth/google/callback
+VITE_API_URL=https://seu-site.onrender.com
+ADMIN_EMAIL=seu-email@gmail.com
+ADMIN_PASSWORD=uma-senha-forte
 ```
 
 ## Principais endpoints
 
 - `GET /health`
-- `POST /auth/google/login`
-- `GET /auth/google/callback`
+- `POST /auth/login`
 - `GET /rooms`
 - `POST /rooms`
 - `GET /categories`
