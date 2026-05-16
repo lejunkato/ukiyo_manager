@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: ukiyo-web
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run prisma:generate && npm run prisma:deploy && npm run prisma:seed && npm run build && npm run build:server
+    startCommand: npm run start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ukiyo-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: ALLOWED_EMAILS
+        sync: false
+
+databases:
+  - name: ukiyo-db
+    plan: free
