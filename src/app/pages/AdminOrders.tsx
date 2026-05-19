@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
-import { ArrowLeft, Clock, Check, X, QrCode, ChevronDown, ChevronUp, DollarSign, LogOut, Edit, Trash2, Plus, Minus } from "lucide-react";
+import { Link } from "react-router";
+import { ArrowLeft, Clock, Check, X, QrCode, ChevronDown, ChevronUp, DollarSign, Edit, Trash2, Plus, Minus } from "lucide-react";
 import logo from "../../imports/image.png";
 import QRCodeDisplay from "../components/QRCodeDisplay";
 import { useAuth } from "../contexts/AuthContext";
-import { api, type Order as ApiOrder, type OrderItem as ApiOrderItem, type Room } from "../lib/api";
+import { getAdminWebSocketUrl } from "../lib/config";
+import { api, type Order as ApiOrder, type OrderItem as ApiOrderItem, type Room, type RoomSession as ApiRoomSession, type RoomSummary } from "../lib/api";
+import UserAccountMenu from "../components/UserAccountMenu";
 
 type OrderItem = ApiOrderItem;
 
 type Order = Omit<ApiOrder, "timestamp"> & { timestamp: Date };
 
-interface RoomSession {
+interface RoomSessionView {
+  sessionId: string;
   roomId: string;
   hourlyRate: number;
   tabs: TabSession[];
@@ -27,6 +30,7 @@ interface TabSession {
   roomChargePaid: number;
   paid: boolean;
   itemsSummary: Map<string, { name: string; quantity: number; price: number }>;
+  hasSummary?: boolean;
 }
 
 interface TabPayment {
@@ -34,31 +38,49 @@ interface TabPayment {
   roomCharge: number;
 }
 
+function getDefaultSessionStartDateTime() {
+  const now = new Date();
+  const roundedMinutes = Math.floor(now.getMinutes() / 15) * 15;
+  now.setMinutes(roundedMinutes, 0, 0);
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-") + `T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+function buildSessionStartDate(dateTime: string) {
+  return new Date(dateTime);
+}
+
 export default function AdminOrders() {
-  const { user, token, logout } = useAuth();
-  const navigate = useNavigate();
+  const { token } = useAuth();
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [activeSessions, setActiveSessions] = useState<ApiRoomSession[]>([]);
+  const [activeRoomSummaries, setActiveRoomSummaries] = useState<RoomSummary[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(true);
   const [activeTab, setActiveTab] = useState<"orders" | "sessions">("orders");
   const [showQRModal, setShowQRModal] = useState<string | null>(null);
   const [expandedRooms, setExpandedRooms] = useState<Set<string>>(new Set());
   const [expandedTabs, setExpandedTabs] = useState<Set<string>>(new Set());
   const [closingTab, setClosingTab] = useState<{
-    room: RoomSession;
+    room: RoomSessionView;
     tab: TabSession;
   } | null>(null);
-  const [closingRoom, setClosingRoom] = useState<RoomSession | null>(null);
+  const [closingRoom, setClosingRoom] = useState<RoomSessionView | null>(null);
   const [customPayments, setCustomPayments] = useState<Record<string, number>>({});
   const [paymentMode, setPaymentMode] = useState<"equal" | "custom">("equal");
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [viewedOrders, setViewedOrders] = useState<Set<string>>(new Set());
-
-  const handleLogout = () => {
-    logout();
-    navigate("/admin/login");
-  };
+  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
+  const [isConfirmingTabPayment, setIsConfirmingTabPayment] = useState(false);
+  const [isConfirmingRoomPayment, setIsConfirmingRoomPayment] = useState(false);
+  const [showStartSessionModal, setShowStartSessionModal] = useState(false);
+  const [startSessionRoomId, setStartSessionRoomId] = useState("");
+  const [startSessionDateTime, setStartSessionDateTime] = useState(getDefaultSessionStartDateTime);
+  const [isStartingSession, setIsStartingSession] = useState(false);
 
   const normalizeOrder = (order: ApiOrder): Order => ({
     ...order,
@@ -71,8 +93,26 @@ export default function AdminOrders() {
         api.getOrders(token),
         api.getRooms(),
       ]);
+      const loadedSessions = await Promise.all(
+        loadedRooms.map((room) => api.getActiveRoomSession(room.id))
+      );
+
+      const activeSessionList = loadedSessions
+        .map((sessionInfo) => sessionInfo.activeSession)
+        .filter((session): session is ApiRoomSession => Boolean(session));
+      const activeRoomIdSet = new Set(activeSessionList.map((session) => session.roomId));
+      const loadedSummaries = await Promise.all(
+        loadedRooms
+          .filter((room) => activeRoomIdSet.has(room.id))
+          .map((room) => api.getRoomSummary(room.id).catch(() => null))
+      );
+
       setOrders(loadedOrders.map(normalizeOrder));
       setRooms(loadedRooms);
+      setActiveSessions(activeSessionList);
+      setActiveRoomSummaries(
+        loadedSummaries.filter((summary): summary is RoomSummary => Boolean(summary))
+      );
       setViewedOrders(new Set(loadedOrders.filter((order) => order.viewed).map((order) => order.id)));
     } catch (error) {
       console.error(error);
@@ -84,6 +124,62 @@ export default function AdminOrders() {
 
   useEffect(() => {
     loadOrders();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    let refreshTimer: number | undefined;
+    let reconnectTimer: number | undefined;
+    let closedByEffect = false;
+    let socket: WebSocket | null = null;
+
+    const scheduleRefresh = () => {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        loadOrders();
+      }, 250);
+    };
+
+    const connect = () => {
+      setRealtimeStatus("connecting");
+      socket = new WebSocket(getAdminWebSocketUrl(token));
+
+      socket.addEventListener("open", () => {
+        setRealtimeStatus("connected");
+      });
+
+      socket.addEventListener("message", (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "orders:changed" || data.type === "sessions:changed") {
+            scheduleRefresh();
+          }
+        } catch (error) {
+          console.error(error);
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        setRealtimeStatus("disconnected");
+        if (!closedByEffect) {
+          reconnectTimer = window.setTimeout(connect, 3000);
+        }
+      });
+
+      socket.addEventListener("error", () => {
+        socket?.close();
+      });
+    };
+
+    connect();
+
+    return () => {
+      closedByEffect = true;
+      window.clearTimeout(refreshTimer);
+      window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
   }, [token]);
 
   const markAsViewed = async (orderId: string) => {
@@ -260,10 +356,48 @@ export default function AdminOrders() {
     return `${hours}h ${minutes}m`;
   };
 
+  const toMoney = (value: number): number => Math.round(value * 100) / 100;
+
+  const sumMoney = (values: number[]): number =>
+    values.reduce((sum, value) => toMoney(sum + value), 0);
+
   const calculateRoomCost = (startTime: Date, hourlyRate: number): number => {
-    const diff = Date.now() - startTime.getTime();
-    const hours = diff / 3600000;
-    return hours * hourlyRate;
+    const diff = Math.max(Date.now() - startTime.getTime(), 0);
+    const billedHours = Math.max(Math.ceil(diff / 3600000), 1);
+    return toMoney(billedHours * hourlyRate);
+  };
+
+  const getOpenTabsCount = (tabs: TabSession[]): number =>
+    Math.max(tabs.filter((tab) => !tab.paid).length, 1);
+
+  const calculatePaidConsumption = (tabs: TabSession[]): number => {
+    return sumMoney(tabs.filter((tab) => tab.paid).map((tab) => tab.totalValue));
+  };
+
+  const calculatePaidRoomCharge = (tabs: TabSession[]): number => {
+    return sumMoney(tabs.map((tab) => tab.roomChargePaid));
+  };
+
+  const calculateRoomBalances = (room: RoomSessionView) => {
+    const totalConsumption = sumMoney(room.tabs.map((tab) => tab.totalValue));
+    const roomCost = calculateRoomCost(room.startTime, room.hourlyRate);
+    const paidConsumption = calculatePaidConsumption(room.tabs);
+    const paidRoomCharge = calculatePaidRoomCharge(room.tabs);
+    const totalPaid = toMoney(paidConsumption + paidRoomCharge);
+    const consumptionBalance = Math.max(toMoney(totalConsumption - paidConsumption), 0);
+    const roomBalance = Math.max(toMoney(roomCost - paidRoomCharge), 0);
+    const totalBalance = toMoney(consumptionBalance + roomBalance);
+
+    return {
+      totalConsumption,
+      roomCost,
+      paidConsumption,
+      paidRoomCharge,
+      totalPaid,
+      consumptionBalance,
+      roomBalance,
+      totalBalance,
+    };
   };
 
   const toggleRoom = (roomId: string) => {
@@ -290,17 +424,46 @@ export default function AdminOrders() {
     });
   };
 
-  const groupOrdersByRoom = (): RoomSession[] => {
-    const roomMap = new Map<string, RoomSession>();
+  const groupOrdersByRoom = (): RoomSessionView[] => {
+    const roomMap = new Map<string, RoomSessionView>();
+    const sessionsByRoomId = new Map(activeSessions.map((session) => [session.roomId, session]));
+
+    activeSessions.forEach((session) => {
+      const room = rooms.find((item) => item.id === session.roomId);
+      if (!room) return;
+
+      const summary = activeRoomSummaries.find((item) => item.room.id === room.id);
+      roomMap.set(room.name, {
+        sessionId: session.id,
+        roomId: room.name,
+        hourlyRate: room.hourlyRate,
+        tabs: summary?.tabs.map((tab) => ({
+          tabId: tab.id,
+          tabName: tab.tabName,
+          personName: tab.personName,
+          orders: [],
+          totalValue: toMoney(tab.totalValue),
+          roomChargePaid: tab.roomChargePaid,
+          paid: tab.paid,
+          hasSummary: true,
+          itemsSummary: new Map(),
+        })) ?? [],
+        startTime: new Date(session.startedAt),
+        active: true,
+      });
+    });
 
     orders.forEach((order) => {
-      const roomRate = rooms.find((room) => room.name === order.roomId)?.hourlyRate ?? 50;
+      const roomInfo = rooms.find((room) => room.name === order.roomId);
+      const activeSession = roomInfo ? sessionsByRoomId.get(roomInfo.id) : undefined;
+      const roomRate = roomInfo?.hourlyRate ?? 50;
       if (!roomMap.has(order.roomId)) {
         roomMap.set(order.roomId, {
+          sessionId: order.roomSessionId ?? activeSession?.id ?? "",
           roomId: order.roomId,
           hourlyRate: roomRate,
           tabs: [],
-          startTime: order.timestamp,
+          startTime: activeSession ? new Date(activeSession.startedAt) : order.timestamp,
           active: true,
         });
       }
@@ -315,15 +478,20 @@ export default function AdminOrders() {
           personName: order.personName,
           orders: [],
           totalValue: 0,
-          roomChargePaid: 0,
-          paid: false,
+          roomChargePaid: order.tabRoomChargePaid,
+          paid: order.tabPaid,
           itemsSummary: new Map(),
         };
         room.tabs.push(tab);
+      } else {
+        tab.roomChargePaid = order.tabRoomChargePaid;
+        tab.paid = order.tabPaid;
       }
 
       tab.orders.push(order);
-      tab.totalValue += order.total;
+      if (!tab.hasSummary) {
+        tab.totalValue = toMoney(tab.totalValue + order.total);
+      }
 
       order.items.forEach((item) => {
         const existing = tab!.itemsSummary.get(item.id);
@@ -338,7 +506,7 @@ export default function AdminOrders() {
         }
       });
 
-      if (order.timestamp < room.startTime) {
+      if (!activeSession && order.timestamp < room.startTime) {
         room.startTime = order.timestamp;
       }
     });
@@ -346,20 +514,23 @@ export default function AdminOrders() {
     return Array.from(roomMap.values());
   };
 
-  const closeTab = (room: RoomSession, tab: TabSession) => {
+  const closeTab = (room: RoomSessionView, tab: TabSession) => {
+    if (tab.paid) return;
     setClosingTab({ room, tab });
   };
 
   const confirmCloseTab = async (roomCharge: number) => {
     if (!closingTab) return;
+    if (closingTab.tab.paid || isConfirmingTabPayment) return;
 
     try {
+      setIsConfirmingTabPayment(true);
       await api.updateTab(closingTab.tab.tabId, {
         roomChargePaid: roomCharge,
         paid: true,
       }, token);
       alert(
-        `Comanda fechada!\n${closingTab.tab.tabName} - ${closingTab.tab.personName}\n` +
+        `Comanda fechada!\n${closingTab.tab.personName} - ${closingTab.tab.tabName}\n` +
           `Consumo: R$ ${closingTab.tab.totalValue.toFixed(2)}\n` +
           `Taxa da Sala: R$ ${roomCharge.toFixed(2)}\n` +
           `Total: R$ ${(closingTab.tab.totalValue + roomCharge).toFixed(2)}`
@@ -368,28 +539,66 @@ export default function AdminOrders() {
       await loadOrders();
     } catch (error) {
       console.error(error);
-      alert("Não foi possível fechar a comanda");
+      alert(error instanceof Error && error.message === "tab_already_paid"
+        ? "Esta comanda já foi paga."
+        : "Não foi possível fechar a comanda");
+      await loadOrders();
+    } finally {
+      setIsConfirmingTabPayment(false);
     }
   };
 
-  const closeRoom = (room: RoomSession) => {
+  const closeRoom = (room: RoomSessionView) => {
     setClosingRoom(room);
     setPaymentMode("equal");
     setCustomPayments({});
   };
 
+  const openStartSessionModal = () => {
+    const activeRoomIds = new Set(activeSessions.map((session) => session.roomId));
+    const firstAvailableRoom = rooms.find((room) => !activeRoomIds.has(room.id));
+    setStartSessionRoomId(firstAvailableRoom?.id ?? "");
+    setStartSessionDateTime(getDefaultSessionStartDateTime());
+    setShowStartSessionModal(true);
+  };
+
+  const openRoomSession = async () => {
+    if (!startSessionRoomId) return;
+
+    try {
+      setIsStartingSession(true);
+      await api.openRoomSession(
+        startSessionRoomId,
+        { startedAt: buildSessionStartDate(startSessionDateTime).toISOString() },
+        token
+      );
+      setShowStartSessionModal(false);
+      await loadOrders();
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error && error.message === "room_session_already_open"
+        ? "Esta sala já tem uma sessão aberta."
+        : "Não foi possível abrir a sessão da sala");
+    } finally {
+      setIsStartingSession(false);
+    }
+  };
+
   const confirmCloseRoom = async () => {
     if (!closingRoom) return;
+    if (isConfirmingRoomPayment) return;
 
     const openTabs = closingRoom.tabs.filter((t) => !t.paid);
-    const totalRoomCost = calculateRoomCost(closingRoom.startTime, closingRoom.hourlyRate);
-    const paidRoomCharge = closingRoom.tabs.reduce((sum, t) => sum + t.roomChargePaid, 0);
-    const remainingRoomCost = totalRoomCost - paidRoomCharge;
+    const {
+      roomCost: totalRoomCost,
+      paidRoomCharge,
+      roomBalance: remainingRoomCost,
+    } = calculateRoomBalances(closingRoom);
 
     let payments: TabPayment[] = [];
 
     if (paymentMode === "equal") {
-      const perTab = remainingRoomCost / openTabs.length;
+      const perTab = openTabs.length > 0 ? toMoney(remainingRoomCost / openTabs.length) : 0;
       payments = openTabs.map((t) => ({
         tabName: t.tabName,
         roomCharge: perTab,
@@ -409,6 +618,7 @@ export default function AdminOrders() {
       .join("\n");
 
     try {
+      setIsConfirmingRoomPayment(true);
       await Promise.all(
         openTabs.map((tab) => {
           const payment = payments.find((item) => item.tabName === tab.tabName);
@@ -419,6 +629,10 @@ export default function AdminOrders() {
           }, token);
         })
       );
+
+      if (closingRoom.sessionId) {
+        await api.closeRoomSession(closingRoom.sessionId, token);
+      }
 
       alert(
         `Sala fechada!\n${closingRoom.roomId}\n\n` +
@@ -432,11 +646,19 @@ export default function AdminOrders() {
       await loadOrders();
     } catch (error) {
       console.error(error);
-      alert("Não foi possível fechar a sala");
+      alert(error instanceof Error && error.message === "tab_already_paid"
+        ? "Uma das comandas já havia sido paga. A tela será atualizada."
+        : "Não foi possível fechar a sala");
+      await loadOrders();
+    } finally {
+      setIsConfirmingRoomPayment(false);
     }
   };
 
   const roomSessions = groupOrdersByRoom();
+  const activeRoomIds = new Set(activeSessions.map((session) => session.roomId));
+  const roomsWithoutActiveSession = rooms.filter((room) => !activeRoomIds.has(room.id));
+  const qrRoom = showQRModal ? rooms.find((room) => room.name === showQRModal) : null;
 
   return (
     <div className="min-h-screen bg-background">
@@ -456,18 +678,23 @@ export default function AdminOrders() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {user && (
-              <div className="text-sm text-white/80">
-                {user.email}
-              </div>
-            )}
-            <button
-              onClick={handleLogout}
-              className="bg-white/10 text-white px-4 py-2 rounded-lg hover:bg-white/20 transition-colors flex items-center gap-2"
-              title="Sair"
-            >
-              <LogOut className="w-5 h-5" />
-            </button>
+            <div className="text-xs text-white/70 flex items-center gap-2">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  realtimeStatus === "connected"
+                    ? "bg-green-400"
+                    : realtimeStatus === "connecting"
+                      ? "bg-yellow-400"
+                      : "bg-red-400"
+                }`}
+              />
+              {realtimeStatus === "connected"
+                ? "Tempo real"
+                : realtimeStatus === "connecting"
+                  ? "Conectando"
+                  : "Reconectando"}
+            </div>
+            <UserAccountMenu />
           </div>
         </div>
       </div>
@@ -526,18 +753,18 @@ export default function AdminOrders() {
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <h4 className="text-sm">
-                          {order.roomId} - {order.tabName}
-                        </h4>
+	                        <h4 className="text-sm">
+	                          {order.roomId} - {order.personName}
+	                        </h4>
                         {isNew && (
                           <span className="px-2 py-0.5 bg-primary text-primary-foreground text-xs rounded animate-pulse">
                             NOVO
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {order.personName}
-                      </div>
+	                      <div className="text-xs text-muted-foreground">
+	                        {order.tabName}
+	                      </div>
                       <div className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                         <Clock className="w-3 h-3" />
                         {formatTime(order.timestamp)}
@@ -635,22 +862,29 @@ export default function AdminOrders() {
       {activeTab === "sessions" && (
         <div className="max-w-7xl mx-auto p-6">
           <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h2>Sessões abertas</h2>
+              </div>
+              <button
+                onClick={openStartSessionModal}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Iniciar Sessão
+              </button>
+            </div>
+
             {roomSessions.map((room) => {
               const isRoomExpanded = expandedRooms.has(room.roomId);
-              const totalConsumption = room.tabs.reduce(
-                (sum, tab) => sum + tab.totalValue,
-                0
-              );
-              const roomCost = calculateRoomCost(room.startTime, room.hourlyRate);
-              const paidRoomCharge = room.tabs.reduce(
-                (sum, t) => sum + t.roomChargePaid,
-                0
-              );
-              const paidConsumption = room.tabs
-                .filter((t) => t.paid)
-                .reduce((sum, t) => sum + t.totalValue, 0);
-              const totalPaid = paidConsumption + paidRoomCharge;
-              const remainingRoomCost = roomCost - paidRoomCharge;
+              const {
+                totalConsumption,
+                roomCost,
+                totalPaid,
+                consumptionBalance,
+                roomBalance,
+                totalBalance,
+              } = calculateRoomBalances(room);
 
               return (
                 <div
@@ -679,7 +913,7 @@ export default function AdminOrders() {
                           </div>
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-4 mr-4">
+                      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mr-4">
                         <div className="text-right">
                           <div className="text-xs text-muted-foreground">
                             Valor da Sala
@@ -706,10 +940,26 @@ export default function AdminOrders() {
                         </div>
                         <div className="text-right">
                           <div className="text-xs text-muted-foreground">
+                            Saldo Consumo
+                          </div>
+                          <div className="text-sm text-primary">
+                            R$ {consumptionBalance.toFixed(2)}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-muted-foreground">
+                            Saldo Sala
+                          </div>
+                          <div className="text-sm text-primary">
+                            R$ {roomBalance.toFixed(2)}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-muted-foreground">
                             Saldo em Aberto
                           </div>
                           <div className="text-sm text-primary">
-                            R$ {remainingRoomCost.toFixed(2)}
+                            R$ {totalBalance.toFixed(2)}
                           </div>
                         </div>
                       </div>
@@ -755,7 +1005,7 @@ export default function AdminOrders() {
                                   )}
                                   <div>
                                     <div className="flex items-center gap-2">
-                                      <h3>{tab.tabName}</h3>
+	                                      <h3>{tab.personName}</h3>
                                       {tab.paid ? (
                                         <span className="px-2 py-0.5 bg-green-500 text-white text-xs rounded">
                                           PAGA
@@ -766,8 +1016,8 @@ export default function AdminOrders() {
                                         </span>
                                       )}
                                     </div>
-                                    <div className="text-sm text-muted-foreground">
-                                      {tab.personName} • {tab.orders.length}{" "}
+	                                    <div className="text-sm text-muted-foreground">
+	                                      {tab.tabName} • {tab.orders.length}{" "}
                                       {tab.orders.length === 1
                                         ? "pedido"
                                         : "pedidos"}
@@ -897,7 +1147,7 @@ export default function AdminOrders() {
 
             {roomSessions.length === 0 && (
               <div className="text-center py-12 text-muted-foreground">
-                Nenhuma sessão ativa no momento
+                Nenhuma sessão aberta no momento
               </div>
             )}
           </div>
@@ -912,10 +1162,10 @@ export default function AdminOrders() {
 
             <div className="space-y-4 mb-6">
               <div className="bg-card border border-border rounded-lg p-4">
-                <div className="text-sm text-muted-foreground mb-1">Comanda</div>
-                <div>
-                  {closingTab.tab.tabName} - {closingTab.tab.personName}
-                </div>
+	                <div className="text-sm text-muted-foreground mb-1">Comanda</div>
+	                <div>
+	                  {closingTab.tab.personName} - {closingTab.tab.tabName}
+	                </div>
               </div>
 
               <div className="bg-card border border-border rounded-lg p-4">
@@ -933,11 +1183,11 @@ export default function AdminOrders() {
                   type="number"
                   step="0.01"
                   defaultValue={
-                    (
+                    toMoney(
                       calculateRoomCost(
                         closingTab.room.startTime,
                         closingTab.room.hourlyRate
-                      ) / closingTab.room.tabs.filter((t) => !t.paid).length
+                      ) / getOpenTabsCount(closingTab.room.tabs)
                     ).toFixed(2)
                   }
                   id="room-charge-input"
@@ -950,7 +1200,7 @@ export default function AdminOrders() {
                   <span>Total a Pagar</span>
                   <span className="text-primary">
                     R${" "}
-                    {(
+                    {toMoney(
                       closingTab.tab.totalValue +
                       parseFloat(
                         (
@@ -979,9 +1229,71 @@ export default function AdminOrders() {
                   ) as HTMLInputElement;
                   confirmCloseTab(parseFloat(input.value));
                 }}
-                className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                disabled={isConfirmingTabPayment}
+                className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Confirmar Pagamento
+                {isConfirmingTabPayment ? "Confirmando..." : "Confirmar Pagamento"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Start Session Modal */}
+      {showStartSessionModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-background rounded-lg max-w-md w-full p-6">
+            <h2 className="mb-4">Iniciar Sessão</h2>
+
+            <div className="space-y-4 mb-6">
+              {roomsWithoutActiveSession.length === 0 ? (
+                <div className="bg-card border border-border rounded-lg p-4 text-sm text-muted-foreground">
+                  Todas as salas já possuem uma sessão aberta.
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm mb-2">Sala</label>
+                    <select
+                      value={startSessionRoomId}
+                      onChange={(event) => setStartSessionRoomId(event.target.value)}
+                      className="w-full px-4 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                    >
+                      {roomsWithoutActiveSession.map((room) => (
+                        <option key={room.id} value={room.id}>
+                          {room.name} - R$ {room.hourlyRate.toFixed(2)}/h
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-2">Data e hora de início</label>
+                    <input
+                      type="datetime-local"
+                      step={900}
+                      value={startSessionDateTime}
+                      onChange={(event) => setStartSessionDateTime(event.target.value)}
+                      className="w-full px-4 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowStartSessionModal(false)}
+                className="flex-1 px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={openRoomSession}
+                disabled={roomsWithoutActiveSession.length === 0 || !startSessionRoomId || isStartingSession}
+                className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isStartingSession ? "Iniciando..." : "Iniciar"}
               </button>
             </div>
           </div>
@@ -997,6 +1309,15 @@ export default function AdminOrders() {
             </div>
 
             <div className="p-6 space-y-6">
+              {(() => {
+                const balances = calculateRoomBalances(closingRoom);
+                const openTabsCount = closingRoom.tabs.filter((t) => !t.paid).length;
+                const perTabRoomBalance = openTabsCount > 0
+                  ? balances.roomBalance / openTabsCount
+                  : 0;
+
+                return (
+                  <>
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-card border border-border rounded-lg p-4">
                   <div className="text-sm text-muted-foreground mb-1">
@@ -1004,10 +1325,7 @@ export default function AdminOrders() {
                   </div>
                   <div className="text-primary">
                     R${" "}
-                    {calculateRoomCost(
-                      closingRoom.startTime,
-                      closingRoom.hourlyRate
-                    ).toFixed(2)}
+                    {balances.roomCost.toFixed(2)}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     {formatDuration(closingRoom.startTime)} • R${" "}
@@ -1021,9 +1339,7 @@ export default function AdminOrders() {
                   </div>
                   <div>
                     R${" "}
-                    {closingRoom.tabs
-                      .reduce((sum, t) => sum + t.roomChargePaid, 0)
-                      .toFixed(2)}
+                    {balances.paidRoomCharge.toFixed(2)}
                   </div>
                 </div>
               </div>
@@ -1032,17 +1348,7 @@ export default function AdminOrders() {
                 <div className="flex justify-between">
                   <span>Saldo Restante da Sala</span>
                   <span className="text-primary">
-                    R${" "}
-                    {(
-                      calculateRoomCost(
-                        closingRoom.startTime,
-                        closingRoom.hourlyRate
-                      ) -
-                      closingRoom.tabs.reduce(
-                        (sum, t) => sum + t.roomChargePaid,
-                        0
-                      )
-                    ).toFixed(2)}
+                    R$ {balances.roomBalance.toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -1061,18 +1367,7 @@ export default function AdminOrders() {
                     <div>Dividir Igualmente</div>
                     <div className="text-sm text-muted-foreground mt-1">
                       {closingRoom.tabs.filter((t) => !t.paid).length} comandas
-                      em aberto • R${" "}
-                      {(
-                        (calculateRoomCost(
-                          closingRoom.startTime,
-                          closingRoom.hourlyRate
-                        ) -
-                          closingRoom.tabs.reduce(
-                            (sum, t) => sum + t.roomChargePaid,
-                            0
-                          )) /
-                        closingRoom.tabs.filter((t) => !t.paid).length
-                      ).toFixed(2)}{" "}
+                      em aberto • R$ {perTabRoomBalance.toFixed(2)}{" "}
                       por comanda
                     </div>
                   </button>
@@ -1092,6 +1387,9 @@ export default function AdminOrders() {
                   </button>
                 </div>
               </div>
+                  </>
+                );
+              })()}
 
               {paymentMode === "custom" && (
                 <div className="space-y-3">
@@ -1104,11 +1402,11 @@ export default function AdminOrders() {
                         className="bg-card border border-border rounded-lg p-3"
                       >
                         <div className="flex items-center justify-between gap-4">
-                          <div className="flex-1">
-                            <div className="text-sm">{tab.tabName}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {tab.personName}
-                            </div>
+	                          <div className="flex-1">
+	                            <div className="text-sm">{tab.personName}</div>
+	                            <div className="text-xs text-muted-foreground">
+	                              {tab.tabName}
+	                            </div>
                           </div>
                           <input
                             type="number"
@@ -1139,9 +1437,9 @@ export default function AdminOrders() {
                         key={tab.tabName}
                         className="flex justify-between text-sm"
                       >
-                        <span>
-                          {tab.tabName} - {tab.personName}
-                        </span>
+	                        <span>
+	                          {tab.personName} - {tab.tabName}
+	                        </span>
                         <span>Consumo: R$ {tab.totalValue.toFixed(2)}</span>
                       </div>
                     ))}
@@ -1158,9 +1456,10 @@ export default function AdminOrders() {
               </button>
               <button
                 onClick={confirmCloseRoom}
-                className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                disabled={isConfirmingRoomPayment}
+                className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Confirmar Fechamento
+                {isConfirmingRoomPayment ? "Confirmando..." : "Confirmar Fechamento"}
               </button>
             </div>
           </div>
@@ -1282,7 +1581,7 @@ export default function AdminOrders() {
       )}
 
       {/* QR Code Modal */}
-      {showQRModal && (
+      {showQRModal && qrRoom && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-background rounded-lg max-w-md w-full p-6">
             <div className="flex justify-between items-center mb-4">
@@ -1296,9 +1595,7 @@ export default function AdminOrders() {
             </div>
 
             <QRCodeDisplay
-              value={`${window.location.origin}/room/${showQRModal
-                .toLowerCase()
-                .replace(/\s+/g, "-")}`}
+              value={`${window.location.origin}/room/${qrRoom.publicCode}`}
               roomName={showQRModal}
             />
 

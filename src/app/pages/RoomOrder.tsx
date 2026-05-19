@@ -24,6 +24,7 @@ export default function RoomOrder() {
   const { roomId } = useParams();
   const [selectedTab, setSelectedTab] = useState<TabInfo | null>(null);
   const [room, setRoom] = useState<Room | null>(null);
+  const [isSessionOpen, setIsSessionOpen] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [menu, setMenu] = useState<MenuItem[]>([]);
   const [existingTabs, setExistingTabs] = useState<TabInfo[]>([]);
@@ -33,7 +34,7 @@ export default function RoomOrder() {
   const [showCart, setShowCart] = useState(false);
   const [showTabSelection, setShowTabSelection] = useState(true);
   const [showAccountSummary, setShowAccountSummary] = useState(false);
-  const [newTabName, setNewTabName] = useState("");
+  const [newPhone, setNewPhone] = useState("");
   const [newPersonName, setNewPersonName] = useState("");
   const [showNewTabForm, setShowNewTabForm] = useState(false);
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
@@ -65,15 +66,23 @@ export default function RoomOrder() {
       if (!roomId) return;
 
       try {
-        const [loadedRoom, loadedCategories, loadedItems, loadedTabs, summary] = await Promise.all([
-          api.getRoom(roomId),
+        const sessionInfo = await api.getActiveRoomSession(roomId);
+        setRoom(sessionInfo.room);
+        setIsSessionOpen(Boolean(sessionInfo.activeSession));
+
+        if (!sessionInfo.activeSession) {
+          setSelectedTab(null);
+          setShowTabSelection(false);
+          return;
+        }
+
+        const [loadedCategories, loadedItems, loadedTabs, summary] = await Promise.all([
           api.getCategories(),
           api.getMenuItems(),
           api.getTabs(roomId),
           api.getRoomSummary(roomId),
         ]);
 
-        setRoom(loadedRoom);
         setCategories(loadedCategories);
         setMenu(loadedItems.filter((item) => item.available));
         setExistingTabs(loadedTabs.map((tab) => ({
@@ -98,6 +107,10 @@ export default function RoomOrder() {
         }
       } catch (error) {
         console.error(error);
+        if (error instanceof Error && error.message === "room_session_not_open") {
+          setIsSessionOpen(false);
+          return;
+        }
         alert("Não foi possível carregar a sala");
       } finally {
         setIsLoadingData(false);
@@ -172,7 +185,7 @@ export default function RoomOrder() {
         })),
       });
       alert(
-        `Pedido enviado!\n${roomId} - ${selectedTab?.tabName}\nTotal: R$ ${total.toFixed(2)}`
+        `Pedido enviado!\n${room?.name ?? "Sala"} - ${selectedTab?.personName}\nTotal: R$ ${total.toFixed(2)}`
       );
       setCart([]);
       setShowCart(false);
@@ -192,16 +205,16 @@ export default function RoomOrder() {
   };
 
   const createNewTab = async () => {
-    if (!newTabName || !newPersonName) {
-      alert("Preencha o nome da comanda e da pessoa");
+    if (!newPersonName.trim() || !newPhone.trim()) {
+      alert("Preencha nome e telefone");
       return;
     }
     if (!roomId) return;
 
     try {
       const newTab = await api.createTab(roomId, {
-        tabName: newTabName,
-        personName: newPersonName,
+        tabName: newPhone.trim(),
+        personName: newPersonName.trim(),
       });
       const tabInfo = {
         id: newTab.id,
@@ -209,7 +222,7 @@ export default function RoomOrder() {
         personName: newTab.personName,
       };
       setExistingTabs((prev) => [...prev, tabInfo]);
-      setNewTabName("");
+      setNewPhone("");
       setNewPersonName("");
       selectTab(tabInfo);
       await refreshSummary();
@@ -240,6 +253,30 @@ export default function RoomOrder() {
     );
   }
 
+  if (!isSessionOpen) {
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
+        <div className="max-w-md w-full space-y-6 text-center">
+          <div className="flex justify-center">
+            <img src={logo} alt="Ukiyo" className="w-32 h-32 object-contain" />
+          </div>
+
+          <div>
+            <h1 className="text-white mb-2">
+              {(room?.name ?? roomId)?.replace("-", " ").toUpperCase()}
+            </h1>
+            <p className="text-white/70">
+              Esta sala ainda não possui uma sessão aberta.
+            </p>
+            <p className="text-white/60 mt-2">
+              Solicite a abertura da sessão a um funcionário para iniciar os pedidos.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (showTabSelection) {
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
@@ -248,10 +285,10 @@ export default function RoomOrder() {
             <img src={logo} alt="Ukiyo" className="w-32 h-32 object-contain" />
           </div>
 
-          <div className="text-center mb-8">
-            <h1 className="text-white mb-2">
-              {roomId?.replace("-", " ").toUpperCase()}
-            </h1>
+	          <div className="text-center mb-8">
+	            <h1 className="text-white mb-2">
+	              {room?.name ?? "Sala"}
+	            </h1>
             <p className="text-white/60">Selecione ou crie uma comanda</p>
           </div>
 
@@ -264,8 +301,8 @@ export default function RoomOrder() {
                   className="w-full bg-white text-black py-4 px-6 rounded-lg hover:bg-white/90 transition-colors flex items-center justify-between"
                 >
                   <div className="text-left">
-                    <div>{tab.tabName}</div>
-                    <div className="text-sm opacity-60">{tab.personName}</div>
+                    <div>{tab.personName}</div>
+                    <div className="text-sm opacity-60">{tab.tabName}</div>
                   </div>
                   <Users className="w-5 h-5" />
                 </button>
@@ -282,30 +319,30 @@ export default function RoomOrder() {
           ) : (
             <div className="space-y-4">
               <div className="bg-white rounded-lg p-6 space-y-4">
-                <div>
-                  <label className="block text-sm mb-2 text-black">
-                    Nome da Comanda
-                  </label>
-                  <input
-                    type="text"
-                    value={newTabName}
-                    onChange={(e) => setNewTabName(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary text-black"
-                    placeholder="Ex: Comanda 3"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm mb-2 text-black">
-                    Seu Nome
-                  </label>
-                  <input
-                    type="text"
-                    value={newPersonName}
-                    onChange={(e) => setNewPersonName(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary text-black"
-                    placeholder="Ex: Ana Costa"
-                  />
-                </div>
+	                <div>
+	                  <label className="block text-sm mb-2 text-black">
+	                    Nome
+	                  </label>
+	                  <input
+	                    type="text"
+	                    value={newPersonName}
+	                    onChange={(e) => setNewPersonName(e.target.value)}
+	                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary text-black"
+	                    placeholder="Ex: Ana Costa"
+	                  />
+	                </div>
+	                <div>
+	                  <label className="block text-sm mb-2 text-black">
+	                    Telefone
+	                  </label>
+	                  <input
+	                    type="tel"
+	                    value={newPhone}
+	                    onChange={(e) => setNewPhone(e.target.value)}
+	                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary text-black"
+	                    placeholder="Ex: (11) 99999-9999"
+	                  />
+	                </div>
               </div>
 
               <button
@@ -336,12 +373,12 @@ export default function RoomOrder() {
           <div>
             <img src={logo} alt="Ukiyo" className="w-20 h-20 object-contain" />
           </div>
-          <div className="text-right">
-            <div className="opacity-80 text-sm">
-              {roomId?.replace("-", " ")}
-            </div>
-            <div>{selectedTab?.tabName}</div>
-            <div className="text-sm text-white/60">{selectedTab?.personName}</div>
+		          <div className="text-right">
+		            <div className="opacity-80 text-sm">
+		              {room?.name ?? "Sala"}
+		            </div>
+	            <div>{selectedTab?.personName}</div>
+	            <div className="text-sm text-white/60">{selectedTab?.tabName}</div>
             <button
               onClick={changeTab}
               className="text-primary text-sm mt-1 hover:underline"
@@ -374,8 +411,8 @@ export default function RoomOrder() {
                     className="w-full bg-card border border-border rounded-lg p-3 hover:bg-secondary/20 transition-colors text-left"
                   >
                     <div className="flex gap-3">
-                      {showThumbnails && (
-                        <div className="w-20 h-20 bg-secondary rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
+	                      {(showThumbnails || item.image) && (
+	                        <div className="w-20 h-20 bg-secondary rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
                           {item.image ? (
                             <img
                               src={item.image}
@@ -430,7 +467,7 @@ export default function RoomOrder() {
       {selectedItem && (
         <div className="fixed inset-0 bg-black/50 z-20 flex items-end">
           <div className="bg-background w-full rounded-t-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            {showThumbnails && (
+	            {(showThumbnails || selectedItem.image) && (
               <div className="relative">
                 <div className="w-full h-48 bg-secondary flex items-center justify-center overflow-hidden">
                   {selectedItem.image ? (
@@ -451,7 +488,7 @@ export default function RoomOrder() {
                 </button>
               </div>
             )}
-            {!showThumbnails && (
+	            {!showThumbnails && !selectedItem.image && (
               <div className="p-4 border-b border-border flex justify-between items-center">
                 <div />
                 <button
@@ -505,10 +542,10 @@ export default function RoomOrder() {
             <div className="p-4 border-b border-border">
               <div className="flex justify-between items-center">
                 <div>
-                  <h2>Seu Pedido</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {selectedTab?.tabName}
-                  </p>
+	                  <h2>Seu Pedido</h2>
+	                  <p className="text-sm text-muted-foreground">
+	                    {selectedTab?.personName}
+	                  </p>
                 </div>
                 <button onClick={() => setShowCart(false)}>✕</button>
               </div>
@@ -588,10 +625,10 @@ export default function RoomOrder() {
             <div className="p-4 border-b border-border">
               <div className="flex justify-between items-center">
                 <div>
-                  <h2>Minha Comanda</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {selectedTab?.tabName} - {selectedTab?.personName}
-                  </p>
+	                  <h2>Minha Comanda</h2>
+	                  <p className="text-sm text-muted-foreground">
+	                    {selectedTab?.personName} - {selectedTab?.tabName}
+	                  </p>
                 </div>
                 <button onClick={() => setShowAccountSummary(false)}>✕</button>
               </div>

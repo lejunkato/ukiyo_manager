@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { Upload, X } from "lucide-react";
 
 interface ImageUploadProps {
-  value?: string;
+  value?: string | null;
   onChange: (imageUrl: string | null) => void;
   placeholder?: string;
 }

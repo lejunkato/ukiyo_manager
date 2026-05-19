@@ -10,13 +10,6 @@ export default function Home() {
         </div>
 
         <div className="space-y-4">
-          <Link
-            to="/room/sala-1"
-            className="block w-full bg-primary text-primary-foreground py-4 px-6 rounded-lg hover:bg-primary/90 transition-colors text-center"
-          >
-            Acesso Cliente (Exemplo: Sala 1)
-          </Link>
-
           <div className="border-t border-white/20 pt-4 mt-4">
             <p className="text-white/60 text-sm mb-3 text-center">
               Painel Administrativo

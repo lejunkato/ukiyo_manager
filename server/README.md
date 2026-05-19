@@ -49,6 +49,7 @@ ADMIN_PASSWORD=uma-senha-forte
 
 - `GET /health`
 - `POST /auth/login`
+- `WS /ws/admin`
 - `GET /rooms`
 - `POST /rooms`
 - `GET /categories`
@@ -63,3 +64,4 @@ ADMIN_PASSWORD=uma-senha-forte
 - `DELETE /orders/:id`
 
 Rotas administrativas de escrita usam `Authorization: Bearer <token>`.
+O WebSocket administrativo usa o mesmo token JWT na query string e notifica mudanças de pedidos e sessões em tempo real.

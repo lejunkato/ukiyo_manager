@@ -16,20 +16,24 @@ enum OrderStatus {
 
 enum UserRole {
   admin
+  superadmin
 }
 
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String
+  passwordHash String?
   picture   String?
   role      UserRole @default(admin)
+  active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Room {
   id         String   @id @default(cuid())
+  publicCode String  @unique @default(cuid())
   name       String   @unique
   floor      Int
   capacity   Int
@@ -39,6 +43,22 @@ model Room {
   updatedAt  DateTime @updatedAt
   tabs       Tab[]
   orders     Order[]
+  sessions   RoomSession[]
+}
+
+model RoomSession {
+  id        String    @id @default(cuid())
+  roomId    String
+  active    Boolean   @default(true)
+  startedAt DateTime  @default(now())
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  tabs      Tab[]
+  orders    Order[]
+
+  @@index([roomId, active])
 }
 
 model Category {
@@ -68,6 +88,7 @@ model MenuItem {
 model Tab {
   id             String    @id @default(cuid())
   roomId         String
+  roomSessionId  String?
   tabName        String
   personName     String
   active         Boolean   @default(true)
@@ -77,14 +98,17 @@ model Tab {
   closedAt       DateTime?
   updatedAt      DateTime  @updatedAt
   room           Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomSession    RoomSession? @relation(fields: [roomSessionId], references: [id], onDelete: Cascade)
   orders         Order[]
 
   @@index([roomId, active])
+  @@index([roomSessionId])
 }
 
 model Order {
   id        String      @id @default(cuid())
   roomId    String
+  roomSessionId String?
   tabId     String
   total     Decimal     @default(0) @db.Decimal(10, 2)
   status    OrderStatus @default(pending)
@@ -92,10 +116,12 @@ model Order {
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
   room      Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomSession RoomSession? @relation(fields: [roomSessionId], references: [id], onDelete: Cascade)
   tab       Tab         @relation(fields: [tabId], references: [id], onDelete: Cascade)
   items     OrderItem[]
 
   @@index([roomId, status])
+  @@index([roomSessionId])
   @@index([tabId])
 }
 

@@ -38,7 +38,7 @@ For example:
 
 
 ## Button
-The Button component is a fundamental interactive element in our design system, designed to trigger actions or navigate
+The Button component is a fundamental interactive element in our design system, designed to trigger actions or navigate'
 users through the application. It provides visual feedback and clear affordances to enhance user experience.
 
 ### Usage

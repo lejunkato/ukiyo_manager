@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
-import { Plus, Pencil, Trash2, ArrowLeft, ChevronDown, ChevronUp, Settings, LogOut } from "lucide-react";
+import { Link } from "react-router";
+import { Plus, Pencil, Trash2, ArrowLeft, ChevronDown, ChevronUp, Settings } from "lucide-react";
 import logo from "../../imports/image.png";
 import ImageUpload from "../components/ImageUpload";
 import { useAuth } from "../contexts/AuthContext";
 import { api, type Category, type MenuItem } from "../lib/api";
+import UserAccountMenu from "../components/UserAccountMenu";
 
 type ModalType = "category" | "item" | null;
 
 export default function AdminMenu() {
-  const { user, token, logout } = useAuth();
-  const navigate = useNavigate();
+  const { token } = useAuth();
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [menu, setMenu] = useState<MenuItem[]>([]);
@@ -28,11 +28,6 @@ export default function AdminMenu() {
     return saved !== null ? JSON.parse(saved) : true;
   });
 
-  const handleLogout = () => {
-    logout();
-    navigate("/admin/login");
-  };
-
   const [categoryForm, setCategoryForm] = useState({
     name: "",
     description: "",
@@ -44,7 +39,7 @@ export default function AdminMenu() {
     description: "",
     price: "",
     available: true,
-    image: "" as string | undefined,
+    image: null as string | null,
   });
 
   useEffect(() => {
@@ -94,7 +89,7 @@ export default function AdminMenu() {
         description: item.description,
         price: item.price.toString(),
         available: item.available,
-        image: item.image,
+        image: item.image ?? null,
       });
     } else {
       setEditingItem(null);
@@ -104,7 +99,7 @@ export default function AdminMenu() {
         description: "",
         price: "",
         available: true,
-        image: undefined,
+        image: null,
       });
     }
     setModalType("item");
@@ -152,7 +147,7 @@ export default function AdminMenu() {
       description: itemForm.description,
       price: parseFloat(itemForm.price),
       available: itemForm.available,
-      image: itemForm.image,
+      image: itemForm.image ?? null,
     };
 
     try {
@@ -254,23 +249,10 @@ export default function AdminMenu() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {user && (
-              <>
-                <div className="text-sm text-white/80 mr-2">
-                  {user.email}
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="bg-secondary text-secondary-foreground px-4 py-3 rounded-lg hover:bg-secondary/80 transition-colors flex items-center gap-2"
-                  title="Sair"
-                >
-                  <LogOut className="w-5 h-5" />
-                </button>
-              </>
-            )}
             <button
               onClick={() => setShowSettings(true)}
               className="bg-secondary text-secondary-foreground px-4 py-3 rounded-lg hover:bg-secondary/80 transition-colors flex items-center gap-2"
+              title="Configurações do cardápio"
             >
               <Settings className="w-5 h-5" />
             </button>
@@ -281,6 +263,7 @@ export default function AdminMenu() {
               <Plus className="w-5 h-5" />
               Nova Categoria
             </button>
+            <UserAccountMenu />
           </div>
         </div>
       </div>
@@ -544,12 +527,12 @@ export default function AdminMenu() {
 
               <div>
                 <label className="block mb-2">Imagem</label>
-                <ImageUpload
-                  value={itemForm.image}
-                  onChange={(imageUrl) =>
-                    setItemForm({ ...itemForm, image: imageUrl || undefined })
-                  }
-                />
+	                <ImageUpload
+	                  value={itemForm.image}
+	                  onChange={(imageUrl) =>
+	                    setItemForm({ ...itemForm, image: imageUrl })
+	                  }
+	                />
               </div>
 
               <div className="flex items-center gap-2">

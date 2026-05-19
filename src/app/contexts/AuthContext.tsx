@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from "react
 interface User {
   email: string;
   name: string;
+  role: "admin" | "superadmin";
   picture?: string;
 }
 
@@ -26,7 +27,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const savedUser = localStorage.getItem("ukiyo_admin_user");
     const savedToken = localStorage.getItem("ukiyo_admin_token");
     if (savedUser) {
-      setUser(JSON.parse(savedUser));
+      const parsedUser = JSON.parse(savedUser);
+      setUser({
+        ...parsedUser,
+        role: parsedUser.role ?? "admin",
+      });
     }
     if (savedToken) {
       setToken(savedToken);

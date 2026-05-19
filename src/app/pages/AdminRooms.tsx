@@ -1,25 +1,19 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
-import { ArrowLeft, Plus, Pencil, Trash2, QrCode, LogOut } from "lucide-react";
+import { Link } from "react-router";
+import { ArrowLeft, Plus, Pencil, Trash2, QrCode } from "lucide-react";
 import logo from "../../imports/image.png";
 import QRCodeDisplay from "../components/QRCodeDisplay";
+import UserAccountMenu from "../components/UserAccountMenu";
 import { useAuth } from "../contexts/AuthContext";
 import { api, type Room } from "../lib/api";
 
 export default function AdminRooms() {
-  const { user, token, logout } = useAuth();
-  const navigate = useNavigate();
-
+  const { token } = useAuth();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [isLoadingRooms, setIsLoadingRooms] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showQRModal, setShowQRModal] = useState<Room | null>(null);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
-
-  const handleLogout = () => {
-    logout();
-    navigate("/admin/login");
-  };
 
   const [formData, setFormData] = useState({
     name: "",
@@ -149,20 +143,6 @@ export default function AdminRooms() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {user && (
-              <>
-                <div className="text-sm text-white/80 mr-2">
-                  {user.email}
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="bg-secondary text-secondary-foreground px-4 py-3 rounded-lg hover:bg-secondary/80 transition-colors flex items-center gap-2"
-                  title="Sair"
-                >
-                  <LogOut className="w-5 h-5" />
-                </button>
-              </>
-            )}
             <button
               onClick={() => openModal()}
               className="bg-primary text-primary-foreground px-6 py-3 rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
@@ -170,6 +150,7 @@ export default function AdminRooms() {
               <Plus className="w-5 h-5" />
               Nova Sala
             </button>
+            <UserAccountMenu />
           </div>
         </div>
       </div>
@@ -366,9 +347,7 @@ export default function AdminRooms() {
             </div>
 
             <QRCodeDisplay
-              value={`${window.location.origin}/room/${showQRModal.name
-                .toLowerCase()
-                .replace(/\s+/g, "-")}`}
+              value={`${window.location.origin}/room/${showQRModal.publicCode}`}
               roomName={showQRModal.name}
             />
 

@@ -4,11 +4,30 @@ const API_URL = getApiUrl();
 
 export interface Room {
   id: string;
+  publicCode: string;
   name: string;
   floor: number;
   capacity: number;
   hourlyRate: number;
   active: boolean;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "superadmin";
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoomSession {
+  id: string;
+  roomId: string;
+  active: boolean;
+  startedAt: string;
+  closedAt?: string | null;
 }
 
 export interface Category {
@@ -25,13 +44,14 @@ export interface MenuItem {
   description: string;
   price: number;
   available: boolean;
-  image?: string;
+  image?: string | null;
   category?: string;
 }
 
 export interface Tab {
   id: string;
   roomId: string;
+  roomSessionId?: string | null;
   tabName: string;
   personName: string;
   paid: boolean;
@@ -50,9 +70,12 @@ export interface OrderItem {
 export interface Order {
   id: string;
   roomId: string;
+  roomSessionId?: string | null;
   tabId: string;
   tabName: string;
   personName: string;
+  tabPaid: boolean;
+  tabRoomChargePaid: number;
   items: OrderItem[];
   total: number;
   status: "pending" | "preparing" | "delivered" | "cancelled";
@@ -62,6 +85,7 @@ export interface Order {
 
 export interface RoomSummary {
   room: Room;
+  activeSession: RoomSession | null;
   tabs: Array<{
     id: string;
     tabName: string;
@@ -88,7 +112,8 @@ async function request<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`API ${response.status}: ${path}`);
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.error || `API ${response.status}: ${path}`);
   }
 
   if (response.status === 204) {
@@ -101,12 +126,40 @@ async function request<T>(
 export const api = {
   getRooms: () => request<Room[]>("/rooms"),
   getRoom: (roomId: string) => request<Room>(`/rooms/${roomId}`),
+  getActiveRoomSession: (roomId: string) =>
+    request<{ room: Room; activeSession: RoomSession | null }>(`/rooms/${roomId}/active-session`),
+  openRoomSession: (
+    roomId: string,
+    data: { startedAt?: string } = {},
+    token?: string | null
+  ) =>
+    request<RoomSession>(`/rooms/${roomId}/sessions`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      token,
+    }),
+  closeRoomSession: (id: string, token?: string | null) =>
+    request<RoomSession>(`/room-sessions/${id}/close`, { method: "PATCH", token }),
   createRoom: (data: Omit<Room, "id">, token?: string | null) =>
     request<Room>("/rooms", { method: "POST", body: JSON.stringify(data), token }),
   updateRoom: (id: string, data: Partial<Room>, token?: string | null) =>
     request<Room>(`/rooms/${id}`, { method: "PUT", body: JSON.stringify(data), token }),
   deleteRoom: (id: string, token?: string | null) =>
     request<void>(`/rooms/${id}`, { method: "DELETE", token }),
+
+  getUsers: (token?: string | null) =>
+    request<AdminUser[]>("/auth/users", { token }),
+  createUser: (
+    data: { name: string; email: string; password: string; role: "admin" | "superadmin"; active: boolean },
+    token?: string | null
+  ) =>
+    request<AdminUser>("/auth/users", { method: "POST", body: JSON.stringify(data), token }),
+  updateUser: (
+    id: string,
+    data: Partial<{ name: string; email: string; password: string; role: "admin" | "superadmin"; active: boolean }>,
+    token?: string | null
+  ) =>
+    request<AdminUser>(`/auth/users/${id}`, { method: "PATCH", body: JSON.stringify(data), token }),
 
   getCategories: () => request<Category[]>("/categories"),
   createCategory: (data: Omit<Category, "id" | "order"> & { order?: number }, token?: string | null) =>
