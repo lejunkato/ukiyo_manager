@@ -113,6 +113,11 @@ async function request<T>(
 
   if (!response.ok) {
     const data = await response.json().catch(() => null);
+    if (response.status === 401 && token && typeof window !== "undefined") {
+      localStorage.removeItem("ukiyo_admin_user");
+      localStorage.removeItem("ukiyo_admin_token");
+      window.dispatchEvent(new Event("ukiyo:auth-expired"));
+    }
     throw new Error(data?.error || `API ${response.status}: ${path}`);
   }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { LogOut, Settings, UserRound, Users } from "lucide-react";
+import { LogOut, Settings, Users } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 
 interface UserAccountMenuProps {
@@ -46,7 +46,7 @@ export default function UserAccountMenu({ onOpenSettings }: UserAccountMenuProps
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-80 bg-popover text-popover-foreground border border-border rounded-lg shadow-xl z-50 overflow-hidden">
+        <div className="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-2rem)] bg-popover text-popover-foreground border border-border rounded-lg shadow-xl z-50 overflow-hidden">
           <div className="p-5 bg-secondary/40 text-center">
             <div className="w-16 h-16 rounded-full bg-primary text-primary-foreground mx-auto mb-3 flex items-center justify-center text-xl uppercase">
               {initials}

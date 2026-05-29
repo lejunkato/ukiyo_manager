@@ -222,7 +222,7 @@ async function upsertEnvSuperAdmin(email: string, password: string) {
 
 app.use(helmet());
 app.use(cors({ origin: env.frontendUrl, credentials: true }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "25mb" }));
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
 
 app.get("/health", (_req, res) => {
@@ -693,7 +693,7 @@ app.put("/menu-items/:id", requireAuth, async (req, res, next) => {
 
 app.delete("/menu-items/:id", requireAuth, async (req, res, next) => {
   try {
-    await prisma.menuItem.delete({ where: { id: routeParam(req.params.id) } });
+    await prisma.menuItem.deleteMany({ where: { id: routeParam(req.params.id) } });
     broadcastAdminEvent("menu:changed", "menu_item_deleted");
     res.status(204).send();
   } catch (error) {

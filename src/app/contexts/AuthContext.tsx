@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { getApiUrl } from "../lib/config";
 
 interface User {
   email: string;
@@ -23,20 +24,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Verifica se tem usuário salvo no localStorage
-    const savedUser = localStorage.getItem("ukiyo_admin_user");
     const savedToken = localStorage.getItem("ukiyo_admin_token");
-    if (savedUser) {
-      const parsedUser = JSON.parse(savedUser);
-      setUser({
-        ...parsedUser,
-        role: parsedUser.role ?? "admin",
-      });
+
+    if (!savedToken) {
+      localStorage.removeItem("ukiyo_admin_user");
+      setIsLoading(false);
+      return;
     }
-    if (savedToken) {
-      setToken(savedToken);
+
+    let cancelled = false;
+
+    async function restoreSession() {
+      try {
+        const response = await fetch(`${getApiUrl()}/auth/me`, {
+          headers: { Authorization: `Bearer ${savedToken}` },
+        });
+
+        if (!response.ok) {
+          throw new Error("invalid_session");
+        }
+
+        const data = await response.json();
+        if (cancelled) return;
+
+        const authUser = {
+          ...data.user,
+          role: data.user.role ?? "admin",
+        };
+        setUser(authUser);
+        setToken(savedToken);
+        localStorage.setItem("ukiyo_admin_user", JSON.stringify(authUser));
+      } catch {
+        if (cancelled) return;
+        setUser(null);
+        setToken(null);
+        localStorage.removeItem("ukiyo_admin_user");
+        localStorage.removeItem("ukiyo_admin_token");
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
     }
-    setIsLoading(false);
+
+    restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setUser(null);
+      setToken(null);
+    };
+
+    window.addEventListener("ukiyo:auth-expired", handleAuthExpired);
+    return () => window.removeEventListener("ukiyo:auth-expired", handleAuthExpired);
   }, []);
 
   const login = (userData: User, authToken?: string) => {

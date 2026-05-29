@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
-import { ArrowLeft, Clock, Check, X, QrCode, ChevronDown, ChevronUp, DollarSign, Edit, Trash2, Plus, Minus } from "lucide-react";
-import logo from "../../imports/image.png";
+import { Clock, Check, X, QrCode, ChevronDown, ChevronUp, DollarSign, Edit, Trash2, Plus, Minus } from "lucide-react";
 import QRCodeDisplay from "../components/QRCodeDisplay";
 import { useAuth } from "../contexts/AuthContext";
 import { getAdminWebSocketUrl } from "../lib/config";
 import { api, type Order as ApiOrder, type OrderItem as ApiOrderItem, type Room, type RoomSession as ApiRoomSession, type RoomSummary } from "../lib/api";
-import UserAccountMenu from "../components/UserAccountMenu";
+import AdminHeader from "../components/AdminHeader";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 type OrderItem = ApiOrderItem;
 
@@ -81,6 +80,12 @@ export default function AdminOrders() {
   const [startSessionRoomId, setStartSessionRoomId] = useState("");
   const [startSessionDateTime, setStartSessionDateTime] = useState(getDefaultSessionStartDateTime);
   const [isStartingSession, setIsStartingSession] = useState(false);
+  const [pendingDeleteOrderId, setPendingDeleteOrderId] = useState<string | null>(null);
+  const [pendingRemoveTabItem, setPendingRemoveTabItem] = useState<{
+    roomId: string;
+    tabName: string;
+    itemId: string;
+  } | null>(null);
 
   const normalizeOrder = (order: ApiOrder): Order => ({
     ...order,
@@ -242,15 +247,19 @@ export default function AdminOrders() {
     }
   };
 
-  const deleteOrder = async (orderId: string) => {
-    if (confirm("Deseja realmente excluir este pedido?")) {
-      try {
-        await api.deleteOrder(orderId, token);
-        setOrders((prev) => prev.filter((order) => order.id !== orderId));
-      } catch (error) {
-        console.error(error);
-        alert("Não foi possível excluir o pedido");
-      }
+  const deleteOrder = (orderId: string) => {
+    setPendingDeleteOrderId(orderId);
+  };
+
+  const confirmDeleteOrder = async () => {
+    if (!pendingDeleteOrderId) return;
+    try {
+      await api.deleteOrder(pendingDeleteOrderId, token);
+      setOrders((prev) => prev.filter((order) => order.id !== pendingDeleteOrderId));
+      setPendingDeleteOrderId(null);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível excluir o pedido");
     }
   };
 
@@ -298,8 +307,13 @@ export default function AdminOrders() {
   };
 
   const removeTabItem = async (roomId: string, tabName: string, itemId: string) => {
-    if (!confirm("Deseja remover este item da comanda?")) return;
+    setPendingRemoveTabItem({ roomId, tabName, itemId });
+  };
 
+  const confirmRemoveTabItem = async () => {
+    if (!pendingRemoveTabItem) return;
+    const { roomId, tabName, itemId } = pendingRemoveTabItem;
+    setPendingRemoveTabItem(null);
     await updateTabItem(roomId, tabName, itemId, 0);
   };
 
@@ -662,42 +676,29 @@ export default function AdminOrders() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <div className="bg-black text-white p-6 shadow-md">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link to="/" className="hover:opacity-80 transition-opacity">
-              <ArrowLeft className="w-6 h-6" />
-            </Link>
-            <img src={logo} alt="Ukiyo" className="w-16 h-16 object-contain" />
-            <div>
-              <h1>Gerenciar Comandas</h1>
-              <p className="text-sm opacity-80">
-                Acompanhe pedidos e sessões das salas
-              </p>
-            </div>
+      <AdminHeader
+        title="Gerenciar Comandas"
+        description="Acompanhe pedidos e sessões das salas"
+        backTo="/"
+        rightSlot={
+          <div className="hidden sm:flex text-xs text-white/70 items-center gap-2">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                realtimeStatus === "connected"
+                  ? "bg-green-400"
+                  : realtimeStatus === "connecting"
+                    ? "bg-yellow-400"
+                    : "bg-red-400"
+              }`}
+            />
+            {realtimeStatus === "connected"
+              ? "Tempo real"
+              : realtimeStatus === "connecting"
+                ? "Conectando"
+                : "Reconectando"}
           </div>
-          <div className="flex items-center gap-3">
-            <div className="text-xs text-white/70 flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  realtimeStatus === "connected"
-                    ? "bg-green-400"
-                    : realtimeStatus === "connecting"
-                      ? "bg-yellow-400"
-                      : "bg-red-400"
-                }`}
-              />
-              {realtimeStatus === "connected"
-                ? "Tempo real"
-                : realtimeStatus === "connecting"
-                  ? "Conectando"
-                  : "Reconectando"}
-            </div>
-            <UserAccountMenu />
-          </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* Tabs */}
       <div className="max-w-7xl mx-auto px-6 pt-6">
@@ -1612,6 +1613,24 @@ export default function AdminOrders() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteOrderId)}
+        title="Excluir pedido"
+        description="Deseja realmente excluir este pedido?"
+        confirmLabel="Excluir"
+        onConfirm={confirmDeleteOrder}
+        onCancel={() => setPendingDeleteOrderId(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingRemoveTabItem)}
+        title="Remover item"
+        description="Deseja remover este item da comanda?"
+        confirmLabel="Remover"
+        onConfirm={confirmRemoveTabItem}
+        onCancel={() => setPendingRemoveTabItem(null)}
+      />
     </div>
   );
 }

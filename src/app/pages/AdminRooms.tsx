@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
-import { ArrowLeft, Plus, Pencil, Trash2, QrCode } from "lucide-react";
-import logo from "../../imports/image.png";
+import { Plus, Pencil, Trash2, QrCode } from "lucide-react";
 import QRCodeDisplay from "../components/QRCodeDisplay";
-import UserAccountMenu from "../components/UserAccountMenu";
 import { useAuth } from "../contexts/AuthContext";
 import { api, type Room } from "../lib/api";
+import AdminActionBar from "../components/AdminActionBar";
+import AdminHeader from "../components/AdminHeader";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 export default function AdminRooms() {
   const { token } = useAuth();
@@ -14,6 +14,7 @@ export default function AdminRooms() {
   const [showModal, setShowModal] = useState(false);
   const [showQRModal, setShowQRModal] = useState<Room | null>(null);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
+  const [pendingDeleteRoomId, setPendingDeleteRoomId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -92,15 +93,19 @@ export default function AdminRooms() {
     }
   };
 
-  const deleteRoom = async (id: string) => {
-    if (confirm("Deseja realmente excluir esta sala?")) {
-      try {
-        await api.deleteRoom(id, token);
-        setRooms((prev) => prev.filter((room) => room.id !== id));
-      } catch (error) {
-        console.error(error);
-        alert("Não foi possível excluir a sala");
-      }
+  const deleteRoom = (id: string) => {
+    setPendingDeleteRoomId(id);
+  };
+
+  const confirmDeleteRoom = async () => {
+    if (!pendingDeleteRoomId) return;
+    try {
+      await api.deleteRoom(pendingDeleteRoomId, token);
+      setRooms((prev) => prev.filter((room) => room.id !== pendingDeleteRoomId));
+      setPendingDeleteRoomId(null);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível excluir a sala");
     }
   };
 
@@ -127,33 +132,21 @@ export default function AdminRooms() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <div className="bg-black text-white p-6 shadow-md">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link to="/" className="hover:opacity-80 transition-opacity">
-              <ArrowLeft className="w-6 h-6" />
-            </Link>
-            <img src={logo} alt="Ukiyo" className="w-16 h-16 object-contain" />
-            <div>
-              <h1>Gerenciar Salas</h1>
-              <p className="text-sm opacity-80">
-                Adicione e configure as salas do karaokê
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => openModal()}
-              className="bg-primary text-primary-foreground px-6 py-3 rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
-            >
-              <Plus className="w-5 h-5" />
-              Nova Sala
-            </button>
-            <UserAccountMenu />
-          </div>
-        </div>
-      </div>
+      <AdminHeader
+        title="Gerenciar Salas"
+        description="Adicione e configure as salas do karaokê"
+        backTo="/"
+      />
+      <AdminActionBar>
+        <button
+          onClick={() => openModal()}
+          className="bg-primary text-primary-foreground px-4 sm:px-6 py-3 rounded-lg hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+        >
+          <Plus className="w-5 h-5" />
+          <span className="sm:hidden">Nova</span>
+          <span className="hidden sm:inline">Nova Sala</span>
+        </button>
+      </AdminActionBar>
 
       {/* Rooms List */}
       <div className="max-w-7xl mx-auto p-6">
@@ -364,6 +357,15 @@ export default function AdminRooms() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteRoomId)}
+        title="Excluir sala"
+        description="Deseja realmente excluir esta sala?"
+        confirmLabel="Excluir"
+        onConfirm={confirmDeleteRoom}
+        onCancel={() => setPendingDeleteRoomId(null)}
+      />
     </div>
   );
 }

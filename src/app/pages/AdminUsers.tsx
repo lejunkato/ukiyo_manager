@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
-import { ArrowLeft, Plus, Save } from "lucide-react";
-import logo from "../../imports/image.png";
+import { Plus, Save } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { api, type AdminUser } from "../lib/api";
-import UserAccountMenu from "../components/UserAccountMenu";
+import AdminHeader from "../components/AdminHeader";
 
 type UserForm = {
   name: string;
@@ -101,23 +99,11 @@ export default function AdminUsers() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="bg-black text-white p-6 shadow-md">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link to="/admin/menu" className="hover:opacity-80 transition-opacity">
-              <ArrowLeft className="w-6 h-6" />
-            </Link>
-            <img src={logo} alt="Ukiyo" className="w-16 h-16 object-contain" />
-            <div>
-              <h1>Usuários</h1>
-              <p className="text-sm opacity-80">Controle de acesso do time</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <UserAccountMenu />
-          </div>
-        </div>
-      </div>
+      <AdminHeader
+        title="Usuários"
+        description="Controle de acesso do time"
+        backTo="/admin/menu"
+      />
 
       <div className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-6">
         <div className="bg-card border border-border rounded-lg p-5 h-fit">

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
-import { Plus, Pencil, Trash2, ArrowLeft, ChevronDown, ChevronUp, Settings } from "lucide-react";
-import logo from "../../imports/image.png";
+import { Plus, Pencil, Trash2, ChevronDown, ChevronUp, Settings } from "lucide-react";
 import ImageUpload from "../components/ImageUpload";
 import { useAuth } from "../contexts/AuthContext";
 import { api, type Category, type MenuItem } from "../lib/api";
-import UserAccountMenu from "../components/UserAccountMenu";
+import AdminActionBar from "../components/AdminActionBar";
+import AdminHeader from "../components/AdminHeader";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 type ModalType = "category" | "item" | null;
 
@@ -18,6 +18,8 @@ export default function AdminMenu() {
   const [modalType, setModalType] = useState<ModalType>(null);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
+  const [pendingDeleteCategoryId, setPendingDeleteCategoryId] = useState<string | null>(null);
+  const [pendingDeleteItemId, setPendingDeleteItemId] = useState<string | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set(categories.map((c) => c.id))
@@ -179,26 +181,34 @@ export default function AdminMenu() {
       alert("Não é possível excluir uma categoria que contém itens");
       return;
     }
-    if (confirm("Deseja realmente excluir esta categoria?")) {
-      try {
-        await api.deleteCategory(id, token);
-        setCategories((prev) => prev.filter((cat) => cat.id !== id));
-      } catch (error) {
-        console.error(error);
-        alert("Não foi possível excluir a categoria");
-      }
+    setPendingDeleteCategoryId(id);
+  };
+
+  const confirmDeleteCategory = async () => {
+    if (!pendingDeleteCategoryId) return;
+    try {
+      await api.deleteCategory(pendingDeleteCategoryId, token);
+      setCategories((prev) => prev.filter((cat) => cat.id !== pendingDeleteCategoryId));
+      setPendingDeleteCategoryId(null);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível excluir a categoria");
     }
   };
 
-  const deleteItem = async (id: string) => {
-    if (confirm("Deseja realmente excluir este item?")) {
-      try {
-        await api.deleteMenuItem(id, token);
-        setMenu((prev) => prev.filter((item) => item.id !== id));
-      } catch (error) {
-        console.error(error);
-        alert("Não foi possível excluir o item");
-      }
+  const deleteItem = (id: string) => {
+    setPendingDeleteItemId(id);
+  };
+
+  const confirmDeleteItem = async () => {
+    if (!pendingDeleteItemId) return;
+    try {
+      await api.deleteMenuItem(pendingDeleteItemId, token);
+      setMenu((prev) => prev.filter((item) => item.id !== pendingDeleteItemId));
+      setPendingDeleteItemId(null);
+    } catch (error) {
+      console.error(error);
+      alert("Não foi possível excluir o item");
     }
   };
 
@@ -233,40 +243,28 @@ export default function AdminMenu() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <div className="bg-black text-white p-6 shadow-md">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link to="/" className="hover:opacity-80 transition-opacity">
-              <ArrowLeft className="w-6 h-6" />
-            </Link>
-            <img src={logo} alt="Ukiyo" className="w-16 h-16 object-contain" />
-            <div>
-              <h1>Gerenciar Cardápio</h1>
-              <p className="text-sm opacity-80">
-                Organize categorias e adicione itens
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowSettings(true)}
-              className="bg-secondary text-secondary-foreground px-4 py-3 rounded-lg hover:bg-secondary/80 transition-colors flex items-center gap-2"
-              title="Configurações do cardápio"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
-            <button
-              onClick={() => openCategoryModal()}
-              className="bg-primary text-primary-foreground px-6 py-3 rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
-            >
-              <Plus className="w-5 h-5" />
-              Nova Categoria
-            </button>
-            <UserAccountMenu />
-          </div>
-        </div>
-      </div>
+      <AdminHeader
+        title="Gerenciar Cardápio"
+        description="Organize categorias e adicione itens"
+        backTo="/"
+      />
+      <AdminActionBar>
+        <button
+          onClick={() => setShowSettings(true)}
+          className="bg-secondary text-secondary-foreground w-11 h-11 sm:w-auto sm:px-4 sm:py-3 rounded-lg hover:bg-secondary/80 transition-colors flex items-center justify-center gap-2"
+          title="Configurações do cardápio"
+        >
+          <Settings className="w-5 h-5" />
+        </button>
+        <button
+          onClick={() => openCategoryModal()}
+          className="bg-primary text-primary-foreground px-4 sm:px-6 py-3 rounded-lg hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+        >
+          <Plus className="w-5 h-5" />
+          <span className="sm:hidden">Nova</span>
+          <span className="hidden sm:inline">Nova Categoria</span>
+        </button>
+      </AdminActionBar>
 
       {/* Menu List */}
       <div className="max-w-7xl mx-auto p-6">
@@ -630,6 +628,24 @@ export default function AdminMenu() {
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteCategoryId)}
+        title="Excluir categoria"
+        description="Deseja realmente excluir esta categoria?"
+        confirmLabel="Excluir"
+        onConfirm={confirmDeleteCategory}
+        onCancel={() => setPendingDeleteCategoryId(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteItemId)}
+        title="Excluir item"
+        description="Deseja realmente excluir este item?"
+        confirmLabel="Excluir"
+        onConfirm={confirmDeleteItem}
+        onCancel={() => setPendingDeleteItemId(null)}
+      />
     </div>
   );
 }
