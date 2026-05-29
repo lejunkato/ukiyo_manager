@@ -34,7 +34,9 @@ export function menuItemDto(item: MenuItem & { category?: Category }) {
 export function tabDto(tab: Tab) {
   return {
     ...tab,
-    roomChargePaid: Number(tab.roomChargePaid)
+    roomChargePaid: Number(tab.roomChargePaid),
+    consumptionDiscount: Number(tab.consumptionDiscount),
+    roomChargeDiscount: Number(tab.roomChargeDiscount)
   };
 }
 
@@ -52,6 +54,8 @@ export function orderDto(order: Order & { room?: Room; roomSession?: RoomSession
     personName: order.tab?.personName,
     tabPaid: order.tab?.paid ?? false,
     tabRoomChargePaid: Number(order.tab?.roomChargePaid ?? 0),
+    tabConsumptionDiscount: Number(order.tab?.consumptionDiscount ?? 0),
+    tabRoomChargeDiscount: Number(order.tab?.roomChargeDiscount ?? 0),
     total: Number(order.total),
     timestamp: order.createdAt,
     items: order.items.map((item) => ({

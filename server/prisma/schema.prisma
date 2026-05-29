@@ -94,6 +94,8 @@ model Tab {
   active         Boolean   @default(true)
   paid           Boolean   @default(false)
   roomChargePaid Decimal   @default(0) @db.Decimal(10, 2)
+  consumptionDiscount Decimal @default(0) @db.Decimal(10, 2)
+  roomChargeDiscount Decimal @default(0) @db.Decimal(10, 2)
   createdAt      DateTime  @default(now())
   closedAt       DateTime?
   updatedAt      DateTime  @updatedAt

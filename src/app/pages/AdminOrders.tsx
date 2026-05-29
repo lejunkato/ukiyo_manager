@@ -27,6 +27,8 @@ interface TabSession {
   orders: Order[];
   totalValue: number;
   roomChargePaid: number;
+  consumptionDiscount: number;
+  roomChargeDiscount: number;
   paid: boolean;
   itemsSummary: Map<string, { name: string; quantity: number; price: number }>;
   hasSummary?: boolean;
@@ -35,6 +37,8 @@ interface TabSession {
 interface TabPayment {
   tabName: string;
   roomCharge: number;
+  roomChargeDiscount: number;
+  consumptionDiscount: number;
 }
 
 function getDefaultSessionStartDateTime() {
@@ -70,6 +74,11 @@ export default function AdminOrders() {
   } | null>(null);
   const [closingRoom, setClosingRoom] = useState<RoomSessionView | null>(null);
   const [customPayments, setCustomPayments] = useState<Record<string, number>>({});
+  const [customConsumptionDiscounts, setCustomConsumptionDiscounts] = useState<Record<string, number>>({});
+  const [roomDiscount, setRoomDiscount] = useState(0);
+  const [tabConsumptionDiscount, setTabConsumptionDiscount] = useState(0);
+  const [tabRoomDiscount, setTabRoomDiscount] = useState(0);
+  const [tabRoomCharge, setTabRoomCharge] = useState(0);
   const [paymentMode, setPaymentMode] = useState<"equal" | "custom">("equal");
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [viewedOrders, setViewedOrders] = useState<Set<string>>(new Set());
@@ -385,11 +394,23 @@ export default function AdminOrders() {
     Math.max(tabs.filter((tab) => !tab.paid).length, 1);
 
   const calculatePaidConsumption = (tabs: TabSession[]): number => {
-    return sumMoney(tabs.filter((tab) => tab.paid).map((tab) => tab.totalValue));
+    return sumMoney(
+      tabs
+        .filter((tab) => tab.paid)
+        .map((tab) => Math.max(toMoney(tab.totalValue - tab.consumptionDiscount), 0))
+    );
   };
 
   const calculatePaidRoomCharge = (tabs: TabSession[]): number => {
     return sumMoney(tabs.map((tab) => tab.roomChargePaid));
+  };
+
+  const calculateConsumptionDiscount = (tabs: TabSession[]): number => {
+    return sumMoney(tabs.map((tab) => tab.consumptionDiscount));
+  };
+
+  const calculateRoomChargeDiscount = (tabs: TabSession[]): number => {
+    return sumMoney(tabs.map((tab) => tab.roomChargeDiscount));
   };
 
   const calculateRoomBalances = (room: RoomSessionView) => {
@@ -397,9 +418,12 @@ export default function AdminOrders() {
     const roomCost = calculateRoomCost(room.startTime, room.hourlyRate);
     const paidConsumption = calculatePaidConsumption(room.tabs);
     const paidRoomCharge = calculatePaidRoomCharge(room.tabs);
+    const consumptionDiscount = calculateConsumptionDiscount(room.tabs);
+    const roomChargeDiscount = calculateRoomChargeDiscount(room.tabs);
+    const totalDiscount = toMoney(consumptionDiscount + roomChargeDiscount);
     const totalPaid = toMoney(paidConsumption + paidRoomCharge);
-    const consumptionBalance = Math.max(toMoney(totalConsumption - paidConsumption), 0);
-    const roomBalance = Math.max(toMoney(roomCost - paidRoomCharge), 0);
+    const consumptionBalance = Math.max(toMoney(totalConsumption - paidConsumption - consumptionDiscount), 0);
+    const roomBalance = Math.max(toMoney(roomCost - paidRoomCharge - roomChargeDiscount), 0);
     const totalBalance = toMoney(consumptionBalance + roomBalance);
 
     return {
@@ -407,6 +431,9 @@ export default function AdminOrders() {
       roomCost,
       paidConsumption,
       paidRoomCharge,
+      consumptionDiscount,
+      roomChargeDiscount,
+      totalDiscount,
       totalPaid,
       consumptionBalance,
       roomBalance,
@@ -458,6 +485,8 @@ export default function AdminOrders() {
           orders: [],
           totalValue: toMoney(tab.totalValue),
           roomChargePaid: tab.roomChargePaid,
+          consumptionDiscount: tab.consumptionDiscount ?? 0,
+          roomChargeDiscount: tab.roomChargeDiscount ?? 0,
           paid: tab.paid,
           hasSummary: true,
           itemsSummary: new Map(),
@@ -493,12 +522,16 @@ export default function AdminOrders() {
           orders: [],
           totalValue: 0,
           roomChargePaid: order.tabRoomChargePaid,
+          consumptionDiscount: order.tabConsumptionDiscount ?? 0,
+          roomChargeDiscount: order.tabRoomChargeDiscount ?? 0,
           paid: order.tabPaid,
           itemsSummary: new Map(),
         };
         room.tabs.push(tab);
       } else {
         tab.roomChargePaid = order.tabRoomChargePaid;
+        tab.consumptionDiscount = order.tabConsumptionDiscount ?? 0;
+        tab.roomChargeDiscount = order.tabRoomChargeDiscount ?? 0;
         tab.paid = order.tabPaid;
       }
 
@@ -530,24 +563,45 @@ export default function AdminOrders() {
 
   const closeTab = (room: RoomSessionView, tab: TabSession) => {
     if (tab.paid) return;
+    const defaultRoomCharge = toMoney(
+      calculateRoomCost(room.startTime, room.hourlyRate) / getOpenTabsCount(room.tabs)
+    );
+    setTabRoomCharge(defaultRoomCharge);
+    setTabConsumptionDiscount(0);
+    setTabRoomDiscount(0);
     setClosingTab({ room, tab });
   };
 
-  const confirmCloseTab = async (roomCharge: number) => {
+  const confirmCloseTab = async (roomCharge: number, consumptionDiscount: number, roomChargeDiscount: number) => {
     if (!closingTab) return;
     if (closingTab.tab.paid || isConfirmingTabPayment) return;
+
+    const normalizedConsumptionDiscount = Math.min(
+      Math.max(toMoney(consumptionDiscount || 0), 0),
+      closingTab.tab.totalValue
+    );
+    const normalizedRoomDiscount = Math.min(
+      Math.max(toMoney(roomChargeDiscount || 0), 0),
+      roomCharge
+    );
 
     try {
       setIsConfirmingTabPayment(true);
       await api.updateTab(closingTab.tab.tabId, {
-        roomChargePaid: roomCharge,
+        roomChargePaid: Math.max(toMoney(roomCharge - normalizedRoomDiscount), 0),
+        consumptionDiscount: normalizedConsumptionDiscount,
+        roomChargeDiscount: normalizedRoomDiscount,
         paid: true,
       }, token);
+      const consumptionPaid = Math.max(toMoney(closingTab.tab.totalValue - normalizedConsumptionDiscount), 0);
+      const roomPaid = Math.max(toMoney(roomCharge - normalizedRoomDiscount), 0);
       alert(
         `Comanda fechada!\n${closingTab.tab.personName} - ${closingTab.tab.tabName}\n` +
           `Consumo: R$ ${closingTab.tab.totalValue.toFixed(2)}\n` +
+          `Desconto Consumo: R$ ${normalizedConsumptionDiscount.toFixed(2)}\n` +
           `Taxa da Sala: R$ ${roomCharge.toFixed(2)}\n` +
-          `Total: R$ ${(closingTab.tab.totalValue + roomCharge).toFixed(2)}`
+          `Desconto Sala: R$ ${normalizedRoomDiscount.toFixed(2)}\n` +
+          `Total Pago: R$ ${(consumptionPaid + roomPaid).toFixed(2)}`
       );
       setClosingTab(null);
       await loadOrders();
@@ -566,6 +620,8 @@ export default function AdminOrders() {
     setClosingRoom(room);
     setPaymentMode("equal");
     setCustomPayments({});
+    setCustomConsumptionDiscounts({});
+    setRoomDiscount(0);
   };
 
   const openStartSessionModal = () => {
@@ -608,26 +664,47 @@ export default function AdminOrders() {
       paidRoomCharge,
       roomBalance: remainingRoomCost,
     } = calculateRoomBalances(closingRoom);
+    const normalizedRoomDiscount = Math.min(
+      Math.max(toMoney(roomDiscount || 0), 0),
+      remainingRoomCost
+    );
+    const remainingRoomAfterDiscount = Math.max(toMoney(remainingRoomCost - normalizedRoomDiscount), 0);
 
     let payments: TabPayment[] = [];
 
     if (paymentMode === "equal") {
-      const perTab = openTabs.length > 0 ? toMoney(remainingRoomCost / openTabs.length) : 0;
-      payments = openTabs.map((t) => ({
+      const perTabCharge = openTabs.length > 0 ? toMoney(remainingRoomAfterDiscount / openTabs.length) : 0;
+      const perTabDiscount = openTabs.length > 0 ? toMoney(normalizedRoomDiscount / openTabs.length) : 0;
+      payments = openTabs.map((t, index) => ({
         tabName: t.tabName,
-        roomCharge: perTab,
+        roomCharge: index === openTabs.length - 1
+          ? Math.max(toMoney(remainingRoomAfterDiscount - perTabCharge * (openTabs.length - 1)), 0)
+          : perTabCharge,
+        roomChargeDiscount: index === openTabs.length - 1
+          ? Math.max(toMoney(normalizedRoomDiscount - perTabDiscount * (openTabs.length - 1)), 0)
+          : perTabDiscount,
+        consumptionDiscount: Math.min(
+          Math.max(toMoney(customConsumptionDiscounts[t.tabName] || 0), 0),
+          t.totalValue
+        ),
       }));
     } else {
+      const perTabDiscount = openTabs.length > 0 ? toMoney(normalizedRoomDiscount / openTabs.length) : 0;
       payments = openTabs.map((t) => ({
         tabName: t.tabName,
-        roomCharge: customPayments[t.tabName] || 0,
+        roomCharge: Math.max(toMoney(customPayments[t.tabName] || 0), 0),
+        roomChargeDiscount: perTabDiscount,
+        consumptionDiscount: Math.min(
+          Math.max(toMoney(customConsumptionDiscounts[t.tabName] || 0), 0),
+          t.totalValue
+        ),
       }));
     }
 
     const summary = payments
       .map(
         (p) =>
-          `${p.tabName}: R$ ${p.roomCharge.toFixed(2)} (sala) + consumo`
+          `${p.tabName}: R$ ${p.roomCharge.toFixed(2)} (sala) + consumo - R$ ${p.consumptionDiscount.toFixed(2)} desconto`
       )
       .join("\n");
 
@@ -640,6 +717,8 @@ export default function AdminOrders() {
             paid: true,
             active: false,
             roomChargePaid: payment?.roomCharge ?? 0,
+            roomChargeDiscount: payment?.roomChargeDiscount ?? 0,
+            consumptionDiscount: payment?.consumptionDiscount ?? 0,
           }, token);
         })
       );
@@ -652,7 +731,8 @@ export default function AdminOrders() {
         `Sala fechada!\n${closingRoom.roomId}\n\n` +
           `Custo Total da Sala: R$ ${totalRoomCost.toFixed(2)}\n` +
           `Já Pago: R$ ${paidRoomCharge.toFixed(2)}\n` +
-          `Restante: R$ ${remainingRoomCost.toFixed(2)}\n\n` +
+          `Restante: R$ ${remainingRoomCost.toFixed(2)}\n` +
+          `Desconto Sala: R$ ${normalizedRoomDiscount.toFixed(2)}\n\n` +
           `Divisão:\n${summary}`
       );
 
@@ -882,6 +962,7 @@ export default function AdminOrders() {
                 totalConsumption,
                 roomCost,
                 totalPaid,
+                totalDiscount,
                 consumptionBalance,
                 roomBalance,
                 totalBalance,
@@ -914,7 +995,7 @@ export default function AdminOrders() {
                           </div>
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mr-4">
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mr-4">
                         <div className="text-right">
                           <div className="text-xs text-muted-foreground">
                             Valor da Sala
@@ -937,6 +1018,14 @@ export default function AdminOrders() {
                           </div>
                           <div className="text-sm text-green-600">
                             R$ {totalPaid.toFixed(2)}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-muted-foreground">
+                            Descontos
+                          </div>
+                          <div className="text-sm text-blue-700">
+                            R$ {totalDiscount.toFixed(2)}
                           </div>
                         </div>
                         <div className="text-right">
@@ -1032,6 +1121,12 @@ export default function AdminOrders() {
                                   {tab.roomChargePaid > 0 && (
                                     <div className="text-xs text-muted-foreground">
                                       Sala paga: R$ {tab.roomChargePaid.toFixed(2)}
+                                    </div>
+                                  )}
+                                  {(tab.consumptionDiscount > 0 || tab.roomChargeDiscount > 0) && (
+                                    <div className="text-xs text-blue-700">
+                                      Desconto: R${" "}
+                                      {toMoney(tab.consumptionDiscount + tab.roomChargeDiscount).toFixed(2)}
                                     </div>
                                   )}
                                 </div>
@@ -1183,17 +1278,43 @@ export default function AdminOrders() {
                 <input
                   type="number"
                   step="0.01"
-                  defaultValue={
-                    toMoney(
-                      calculateRoomCost(
-                        closingTab.room.startTime,
-                        closingTab.room.hourlyRate
-                      ) / getOpenTabsCount(closingTab.room.tabs)
-                    ).toFixed(2)
-                  }
-                  id="room-charge-input"
+                  min="0"
+                  value={tabRoomCharge}
+                  onChange={(event) => setTabRoomCharge(parseFloat(event.target.value) || 0)}
                   className="w-full px-4 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
                 />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm mb-2">
+                    Desconto Consumo (R$)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={closingTab.tab.totalValue}
+                    value={tabConsumptionDiscount}
+                    onChange={(event) => setTabConsumptionDiscount(parseFloat(event.target.value) || 0)}
+                    className="w-full px-4 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm mb-2">
+                    Desconto Sala (R$)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={tabRoomCharge}
+                    value={tabRoomDiscount}
+                    onChange={(event) => setTabRoomDiscount(parseFloat(event.target.value) || 0)}
+                    className="w-full px-4 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
               </div>
 
               <div className="bg-accent border border-border rounded-lg p-4">
@@ -1202,14 +1323,8 @@ export default function AdminOrders() {
                   <span className="text-primary">
                     R${" "}
                     {toMoney(
-                      closingTab.tab.totalValue +
-                      parseFloat(
-                        (
-                          document.getElementById(
-                            "room-charge-input"
-                          ) as HTMLInputElement
-                        )?.value || "0"
-                      )
+                      Math.max(closingTab.tab.totalValue - tabConsumptionDiscount, 0) +
+                      Math.max(tabRoomCharge - tabRoomDiscount, 0)
                     ).toFixed(2)}
                   </span>
                 </div>
@@ -1224,12 +1339,7 @@ export default function AdminOrders() {
                 Cancelar
               </button>
               <button
-                onClick={() => {
-                  const input = document.getElementById(
-                    "room-charge-input"
-                  ) as HTMLInputElement;
-                  confirmCloseTab(parseFloat(input.value));
-                }}
+                onClick={() => confirmCloseTab(tabRoomCharge, tabConsumptionDiscount, tabRoomDiscount)}
                 disabled={isConfirmingTabPayment}
                 className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -1355,6 +1465,22 @@ export default function AdminOrders() {
               </div>
 
               <div>
+                <label className="block text-sm mb-2">Desconto da Sala (R$)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max={balances.roomBalance}
+                  value={roomDiscount}
+                  onChange={(event) => setRoomDiscount(parseFloat(event.target.value) || 0)}
+                  className="w-full px-4 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <div className="text-xs text-muted-foreground mt-1">
+                  Esse desconto reduz o saldo da sala antes da divisão.
+                </div>
+              </div>
+
+              <div>
                 <h3 className="mb-3">Modo de Divisão</h3>
                 <div className="space-y-2">
                   <button
@@ -1366,9 +1492,9 @@ export default function AdminOrders() {
                     }`}
                   >
                     <div>Dividir Igualmente</div>
-                    <div className="text-sm text-muted-foreground mt-1">
+                      <div className="text-sm text-muted-foreground mt-1">
                       {closingRoom.tabs.filter((t) => !t.paid).length} comandas
-                      em aberto • R$ {perTabRoomBalance.toFixed(2)}{" "}
+                      em aberto • R$ {Math.max(toMoney((balances.roomBalance - roomDiscount) / Math.max(openTabsCount, 1)), 0).toFixed(2)}{" "}
                       por comanda
                     </div>
                   </button>
@@ -1436,12 +1562,33 @@ export default function AdminOrders() {
                     .map((tab) => (
                       <div
                         key={tab.tabName}
-                        className="flex justify-between text-sm"
+                        className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 text-sm"
                       >
-	                        <span>
-	                          {tab.personName} - {tab.tabName}
-	                        </span>
-                        <span>Consumo: R$ {tab.totalValue.toFixed(2)}</span>
+                        <div>
+                          <div>{tab.personName} - {tab.tabName}</div>
+                          <div className="text-muted-foreground">
+                            Consumo: R$ {tab.totalValue.toFixed(2)}
+                          </div>
+                        </div>
+                        <div className="sm:w-44">
+                          <label className="block text-xs text-muted-foreground mb-1">
+                            Desconto consumo
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max={tab.totalValue}
+                            value={customConsumptionDiscounts[tab.tabName] || ""}
+                            onChange={(event) =>
+                              setCustomConsumptionDiscounts({
+                                ...customConsumptionDiscounts,
+                                [tab.tabName]: parseFloat(event.target.value) || 0,
+                              })
+                            }
+                            className="w-full px-3 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-ring text-sm"
+                          />
+                        </div>
                       </div>
                     ))}
                 </div>

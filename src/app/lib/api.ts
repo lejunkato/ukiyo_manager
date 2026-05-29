@@ -56,6 +56,8 @@ export interface Tab {
   personName: string;
   paid: boolean;
   roomChargePaid: number;
+  consumptionDiscount: number;
+  roomChargeDiscount: number;
 }
 
 export interface OrderItem {
@@ -76,6 +78,8 @@ export interface Order {
   personName: string;
   tabPaid: boolean;
   tabRoomChargePaid: number;
+  tabConsumptionDiscount: number;
+  tabRoomChargeDiscount: number;
   items: OrderItem[];
   total: number;
   status: "pending" | "preparing" | "delivered" | "cancelled";
@@ -93,6 +97,8 @@ export interface RoomSummary {
     totalValue: number;
     paid: boolean;
     roomChargePaid: number;
+    consumptionDiscount: number;
+    roomChargeDiscount: number;
     items: { name: string; quantity: number; price: number }[];
   }>;
 }

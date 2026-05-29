@@ -771,6 +771,12 @@ app.patch("/tabs/:id", requireAuth, async (req, res, next) => {
           roomChargePaid: req.body.roomChargePaid === undefined
             ? undefined
             : new Prisma.Decimal(req.body.roomChargePaid),
+          consumptionDiscount: req.body.consumptionDiscount === undefined
+            ? undefined
+            : new Prisma.Decimal(req.body.consumptionDiscount),
+          roomChargeDiscount: req.body.roomChargeDiscount === undefined
+            ? undefined
+            : new Prisma.Decimal(req.body.roomChargeDiscount),
           closedAt: req.body.active === false ? new Date() : undefined
         }
       });
@@ -801,6 +807,12 @@ app.patch("/tabs/:id", requireAuth, async (req, res, next) => {
         roomChargePaid: req.body.roomChargePaid === undefined
           ? undefined
           : new Prisma.Decimal(req.body.roomChargePaid),
+        consumptionDiscount: req.body.consumptionDiscount === undefined
+          ? undefined
+          : new Prisma.Decimal(req.body.consumptionDiscount),
+        roomChargeDiscount: req.body.roomChargeDiscount === undefined
+          ? undefined
+          : new Prisma.Decimal(req.body.roomChargeDiscount),
         closedAt: req.body.active === false ? new Date() : undefined
       }
     });
@@ -868,6 +880,8 @@ app.get("/rooms/:roomId/summary", async (req, res, next) => {
           totalValue,
           paid: tab.paid,
           roomChargePaid: Number(tab.roomChargePaid),
+          consumptionDiscount: Number(tab.consumptionDiscount),
+          roomChargeDiscount: Number(tab.roomChargeDiscount),
           items: Array.from(itemsMap.values())
         };
       })
